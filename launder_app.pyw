@@ -43,7 +43,7 @@ GOLD, GOLD2, RED, VIP = "#d4a94f", "#f0cd7a", "#d77a6a", "#c58be0"
 FONT = "Segoe UI"
 TYPE_COLOR = {"vip": VIP, "regular": GOLD}
 
-APP_VERSION = "1.7"  # shown in the title bar so you can tell which build you are running
+APP_VERSION = "1.8"  # shown in the title bar so you can tell which build you are running
 START_W, START_H = 1136, 680  # the window opens at this size every time
 
 # ---------- logo (The Benefactor), embedded so no extra files are needed ----------
@@ -1083,9 +1083,14 @@ class App:
         self.edit_btn = ttk.Button(bar, text="Edit selected entry", command=self.on_hist_edit)
         self.edit_btn.pack(side="left")
         self.edit_btn.state(["disabled"])
-        ttk.Label(bar, text="or double-click an entry", style="Muted.TLabel").pack(side="left", padx=10)
+        self.del_entry_btn = ttk.Button(bar, text="Delete selected entry", style="Danger.TButton",
+                                        command=self.on_hist_delete)
+        self.del_entry_btn.pack(side="left", padx=(8, 0))
+        self.del_entry_btn.state(["disabled"])
+        ttk.Label(bar, text="double-click an entry to edit it", style="Muted.TLabel").pack(side="left", padx=10)
         self.hist_tree.bind("<<TreeviewSelect>>", self.on_hist_select)
         self.hist_tree.bind("<Double-1>", self.on_hist_edit)
+        self.hist_tree.bind("<Delete>", self.on_hist_delete)
         wrap.pack(fill="both", expand=True)
 
         self.all_cols = [("client", "Client", 140, "w"), ("type", "Type", 70, "w"),
@@ -1260,6 +1265,7 @@ class App:
     def render_history(self):
         self.clear(self.hist_tree)
         self.edit_btn.state(["disabled"])
+        self.del_entry_btn.state(["disabled"])
         p = self.profile()
         if not p:
             return
@@ -1379,7 +1385,9 @@ class App:
 
     def on_hist_select(self, _event=None):
         sel = self.hist_tree.selection()
-        self.edit_btn.state(["!disabled" if sel and str(sel[0]).startswith("h") else "disabled"])
+        flag = "!disabled" if sel and str(sel[0]).startswith("h") else "disabled"
+        self.edit_btn.state([flag])
+        self.del_entry_btn.state([flag])
 
     def on_hist_edit(self, event=None):
         iid = ""
@@ -1390,6 +1398,52 @@ class App:
             iid = sel[0] if sel else ""
         if str(iid).startswith("h") and str(iid)[1:].isdigit():
             self.begin_edit(int(str(iid)[1:]))
+
+    def selected_entry(self):
+        sel = self.hist_tree.selection()
+        iid = str(sel[0]) if sel else ""
+        return int(iid[1:]) if iid.startswith("h") and iid[1:].isdigit() else None
+
+    def on_hist_delete(self, _event=None):
+        idx = self.selected_entry()
+        p = self.profile()
+        if idx is None or not p or not 0 <= idx < len(p["history"]):
+            return
+        h = p["history"][idx]
+        c = h["counts"]
+        what = ", ".join(f"{c.get(k, 0)} {w}" for k, w in (("big", "big"), ("avg", "avg"), ("small", "small")) if c.get(k, 0))
+        if not messagebox.askyesno(
+                "Delete entry",
+                f"Delete the entry from {h['date']}?\n\n{what or 'no bags'}  \u00b7  your take {L.money(h['sale'] - h['cut'])}"
+                f"\n\nThis can't be undone."):
+            return
+        err = self.delete_entry(idx)
+        if err:
+            messagebox.showerror("The Benefactor", err)
+
+    def delete_entry(self, idx):
+        """Remove one saved entry from the current client. Returns an error message, or None."""
+        data = L.load(self.path)
+        name = L.find(data, self.cur or "")
+        if not name:
+            return "No client selected."
+        profile = data[name]
+        hist = profile["history"]
+        if not 0 <= idx < len(hist):
+            return "That entry no longer exists."
+        removed = hist.pop(idx)
+        # 'Repeat last' should point at the newest entry that is still there
+        profile["last"] = dict(hist[-1]["counts"]) if hist else {}
+        self.write(data)
+        # keep the edit box pointing at the right entry (or leave edit mode if it was the one removed)
+        if self.edit_idx is not None:
+            if self.edit_idx == idx:
+                self.reset_inputs()
+            elif self.edit_idx > idx:
+                self.edit_idx -= 1
+        self.refresh()
+        self.say(f"Deleted the entry from {removed['date']} for {name}.")
+        return None
 
     def begin_edit(self, idx):
         p = self.profile()
