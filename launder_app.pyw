@@ -43,7 +43,7 @@ GOLD, GOLD2, RED, VIP = "#d4a94f", "#f0cd7a", "#d77a6a", "#c58be0"
 FONT = "Segoe UI"
 TYPE_COLOR = {"vip": VIP, "regular": GOLD}
 
-APP_VERSION = "1.6"  # shown in the title bar so you can tell which build you are running
+APP_VERSION = "1.7"  # shown in the title bar so you can tell which build you are running
 START_W, START_H = 1136, 680  # the window opens at this size every time
 
 # ---------- logo (The Benefactor), embedded so no extra files are needed ----------
@@ -832,6 +832,7 @@ class App:
         self.names = []
         self.cur = None
         self.saved = False
+        self.edit_idx = None   # index of the history entry being edited, or None
         self.busy = False
         self._status_job = None
 
@@ -879,6 +880,7 @@ class App:
         st.configure("Bold.TLabel", background=PANEL, foreground=TEXT, font=bold)
         st.configure("Muted.TLabel", background=PANEL, foreground=MUTED, font=(FONT, 9))
         st.configure("Head.TLabel", background=PANEL, foreground=MUTED, font=(FONT, 9, "bold"))
+        st.configure("Gold.TLabel", background=PANEL, foreground=GOLD2, font=(FONT, 10, "bold"))
         st.configure("Title.TLabel", background=BG, foreground=GOLD2, font=("Georgia", 16, "bold"))
         st.configure("Status.TLabel", background=BG, foreground=MUTED)
 
@@ -1023,13 +1025,16 @@ class App:
             self.spins[key] = sp
             self.step_btns += [minus, plus]
 
+        self.edit_note = ttk.Label(bc, text="", style="Gold.TLabel")   # shown only while editing
         btns = ttk.Frame(bc, style="Card.TFrame")
         btns.pack(fill="x", pady=(16, 0))
+        self.btn_row = btns
         self.save_btn = ttk.Button(btns, text="Save entry", style="Accent.TButton", command=self.on_save)
         self.save_btn.pack(side="left")
         self.repeat_btn = ttk.Button(btns, text="Repeat last", command=self.on_repeat)
         self.repeat_btn.pack(side="left", padx=8)
-        ttk.Button(btns, text="Clear", command=self.on_clear).pack(side="left")
+        self.clear_btn = ttk.Button(btns, text="Clear", command=self.on_clear)
+        self.clear_btn.pack(side="left")
 
         # --- this entry ---
         ec = self.card(right, "This entry")
@@ -1073,6 +1078,14 @@ class App:
                           ("small", "Small", 52, "e"), ("cut", "Regular", 100, "e"),
                           ("sale", "Sale price", 100, "e"), ("take", "My take", 100, "e")]
         wrap, self.hist_tree = self.make_tree(hist_page, self.hist_cols, 8)
+        bar = ttk.Frame(hist_page, style="Card.TFrame")
+        bar.pack(side="bottom", fill="x", pady=(8, 0))
+        self.edit_btn = ttk.Button(bar, text="Edit selected entry", command=self.on_hist_edit)
+        self.edit_btn.pack(side="left")
+        self.edit_btn.state(["disabled"])
+        ttk.Label(bar, text="or double-click an entry", style="Muted.TLabel").pack(side="left", padx=10)
+        self.hist_tree.bind("<<TreeviewSelect>>", self.on_hist_select)
+        self.hist_tree.bind("<Double-1>", self.on_hist_edit)
         wrap.pack(fill="both", expand=True)
 
         self.all_cols = [("client", "Client", 140, "w"), ("type", "Type", 70, "w"),
@@ -1214,7 +1227,7 @@ class App:
                 lbl.configure(text=f"{L.label(p['type'])} {L.money(L.CUT[p['type']][key])}  ·  sale {sale}")
             else:
                 lbl.configure(text=f"sale {sale}")
-        self.repeat_btn.state(["!disabled" if p and any((p.get("last") or {}).values()) else "disabled"])
+        self.update_edit_ui()
         for tree, cols in ((self.calc_tree, self.calc_cols), (self.hist_tree, self.hist_cols)):
             tree.heading("cut", text=self.label())
         self.render_all()
@@ -1246,12 +1259,14 @@ class App:
 
     def render_history(self):
         self.clear(self.hist_tree)
+        self.edit_btn.state(["disabled"])
         p = self.profile()
         if not p:
             return
-        for h in reversed(p["history"]):
+        for idx in range(len(p["history"]) - 1, -1, -1):
+            h = p["history"][idx]
             c = h["counts"]
-            self.hist_tree.insert("", "end", values=(
+            self.hist_tree.insert("", "end", iid=f"h{idx}", values=(
                 h["date"], c.get("big", 0), c.get("avg", 0), c.get("small", 0),
                 L.money(h["cut"]), L.money(h["sale"]), L.money(h["sale"] - h["cut"])))
         if p["history"]:
@@ -1292,7 +1307,7 @@ class App:
         i = self.combo.current()
         if 0 <= i < len(self.names):
             self.cur = self.names[i]
-            self.set_counts({})
+            self.reset_inputs()
             self.refresh()
 
     def ask_new_client(self):
@@ -1316,7 +1331,7 @@ class App:
         L.create_profile(data, name, ctype)
         self.write(data)
         self.cur = name
-        self.set_counts({})
+        self.reset_inputs()
         self.refresh()
         return None
 
@@ -1332,13 +1347,59 @@ class App:
         data.pop(L.find(data, name) or name, None)
         self.write(data)
         self.cur = None
-        self.set_counts({})
+        self.reset_inputs()
         self.refresh()
         self.say(f"Deleted {name}.")
 
-    def on_clear(self):
+    def reset_inputs(self):
+        """Empty the bag boxes and leave edit mode."""
+        self.edit_idx = None
         self.set_counts({})
+
+    def on_clear(self):
+        """Clear the boxes; while editing this is 'Cancel edit'."""
+        self.reset_inputs()
+        self.update_edit_ui()
         self.render_calc()
+
+    def update_edit_ui(self):
+        p = self.profile()
+        editing = p is not None and self.edit_idx is not None and 0 <= self.edit_idx < len(p["history"])
+        if not editing:
+            self.edit_idx = None
+        self.save_btn.configure(text="Update entry" if editing else "Save entry")
+        self.clear_btn.configure(text="Cancel edit" if editing else "Clear")
+        if editing:
+            self.edit_note.configure(text="Editing the entry from " + p["history"][self.edit_idx]["date"])
+            self.edit_note.pack(fill="x", pady=(14, 0), before=self.btn_row)
+        else:
+            self.edit_note.pack_forget()
+        can_repeat = bool(p and any((p.get("last") or {}).values())) and not editing
+        self.repeat_btn.state(["!disabled" if can_repeat else "disabled"])
+
+    def on_hist_select(self, _event=None):
+        sel = self.hist_tree.selection()
+        self.edit_btn.state(["!disabled" if sel and str(sel[0]).startswith("h") else "disabled"])
+
+    def on_hist_edit(self, event=None):
+        iid = ""
+        if event is not None:                       # double-click on a row
+            iid = self.hist_tree.identify_row(event.y)
+        if not iid:                                 # button click, or double-click on empty space
+            sel = self.hist_tree.selection()
+            iid = sel[0] if sel else ""
+        if str(iid).startswith("h") and str(iid)[1:].isdigit():
+            self.begin_edit(int(str(iid)[1:]))
+
+    def begin_edit(self, idx):
+        p = self.profile()
+        if not p or not 0 <= idx < len(p["history"]):
+            return
+        self.edit_idx = idx
+        self.set_counts(p["history"][idx]["counts"])
+        self.update_edit_ui()
+        self.render_calc()
+        self.say("Change the numbers, then click Update entry.")
 
     def on_repeat(self):
         p = self.profile()
@@ -1364,23 +1425,33 @@ class App:
             return "Enter at least one bag first."
         cut = sum(x[2] for x in lines)
         sale = sum(x[3] for x in lines)
-        profile["last"] = counts
-        profile["history"].append({
-            "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "counts": counts, "cut": cut, "sale": sale,
-        })
+        hist = profile["history"]
+        if self.edit_idx is not None:
+            i = self.edit_idx
+            if not 0 <= i < len(hist):
+                return "That entry no longer exists."
+            hist[i].update(counts=counts, cut=cut, sale=sale)   # keeps its original date
+            if i == len(hist) - 1:
+                profile["last"] = counts
+            msg = f"Updated the entry from {hist[i]['date']} for {name}"
+        else:
+            profile["last"] = counts
+            hist.append({
+                "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "counts": counts, "cut": cut, "sale": sale,
+            })
+            msg = f"Saved for {name}"
         self.write(data)
+        self.reset_inputs()          # empty and ready for the next entry
         self.refresh()
-        self.saved = True
-        self.render_calc()
-        self.say(f"Saved for {name} - your take {L.money(sale - cut)}.")
+        self.say(f"{msg} - your take {L.money(sale - cut)}.")
         return None
 
     def on_all_open(self, _event=None):
         sel = self.all_tree.selection()
         if sel and sel[0].isdigit() and int(sel[0]) < len(self.names):
             self.cur = self.names[int(sel[0])]
-            self.set_counts({})
+            self.reset_inputs()
             self.refresh()
             self.tabs.select(0)
 
