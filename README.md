@@ -31,6 +31,21 @@ Clients are saved in `%APPDATA%\The Benefactor\profiles.json`, outside the
 install folder, so updating or uninstalling never deletes them. Back that file up
 before big updates. It is deliberately listed in `.gitignore`.
 
+## Check for updates
+
+The **Check for updates** button (top right of the window) looks at the newest
+[GitHub Release](https://github.com/ubataz402-creator/The-Benefactor/releases) of this repository
+and offers to open its download page when it is newer than the installed version.
+
+To publish an update so the button finds it:
+
+1. Bump `APP_VERSION` in `launder_app.pyw` and `AppVersion` in `TheBenefactor.iss`.
+2. Rebuild the .exe and compile the installer.
+3. On GitHub: Releases -> Draft a new release. Use a tag that is higher than the installed
+   version (for example `v1.10`), write what changed, attach `TheBenefactorSetup.exe`, and publish.
+
+Until a release exists, the button says "No newer release has been published yet".
+
 ## Updating
 
 Change the files, bump `APP_VERSION` in `launder_app.pyw` and `AppVersion` in

@@ -15,8 +15,13 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
+import threading
 import traceback
+import urllib.error
+import urllib.request
+import webbrowser
 from datetime import datetime, timedelta
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -43,7 +48,7 @@ GOLD, GOLD2, RED, VIP = "#d4a94f", "#f0cd7a", "#d77a6a", "#c58be0"
 FONT = "Segoe UI"
 TYPE_COLOR = {"vip": VIP, "regular": GOLD}
 
-APP_VERSION = "1.8"  # shown in the title bar so you can tell which build you are running
+APP_VERSION = "1.9"  # shown in the title bar so you can tell which build you are running
 START_W, START_H = 1136, 680  # the window opens at this size every time
 
 # ---------- logo (The Benefactor), embedded so no extra files are needed ----------
@@ -621,6 +626,60 @@ def is_count(text):
     return text == "" or (text.isdigit() and len(text) <= 4)
 
 
+# ---------- update check (looks at the newest GitHub Release) ----------
+GITHUB_REPO = "ubataz402-creator/The-Benefactor"
+RELEASES_PAGE = f"https://github.com/{GITHUB_REPO}/releases"
+
+
+def parse_version(text):
+    """'v1.9' -> (1, 9); None if there's no number in it."""
+    m = re.search(r"\d+(?:\.\d+)*", str(text or ""))
+    return tuple(int(x) for x in m.group(0).split(".")) if m else None
+
+
+def is_newer(remote, local):
+    r, l = parse_version(remote), parse_version(local)
+    if r is None or l is None:
+        return False
+    n = max(len(r), len(l))
+    return r + (0,) * (n - len(r)) > l + (0,) * (n - len(l))
+
+
+def check_latest_release(timeout=8):
+    """Ask GitHub for the newest published release. Returns one of:
+    ("new", tag, notes, url)  - a newer version exists
+    ("current", tag)          - you already have the newest
+    ("none",)                 - nothing has been published yet
+    ("error", message)        - couldn't check"""
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "The-Benefactor-update-check"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            info = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return ("none",)
+        if e.code in (403, 429):
+            return ("error", "GitHub is limiting requests right now. Try again in a few minutes.")
+        return ("error", f"GitHub answered with error {e.code}.")
+    except (urllib.error.URLError, OSError):
+        return ("error", "Couldn't reach GitHub. Check your internet connection and try again.")
+    except ValueError:
+        return ("error", "GitHub's answer wasn't understood.")
+    if not isinstance(info, dict):
+        return ("error", "GitHub's answer wasn't understood.")
+    tag = str(info.get("tag_name") or info.get("name") or "")
+    if parse_version(tag) is None:
+        return ("error", "The newest release has no version number in its name (use a tag like v1.9).")
+    if not is_newer(tag, APP_VERSION):
+        return ("current", tag)
+    url = str(info.get("html_url") or "")
+    if not url.lower().startswith(f"https://github.com/{GITHUB_REPO}/".lower()):
+        url = RELEASES_PAGE          # only ever open pages of our own repository
+    return ("new", tag, str(info.get("body") or "").strip()[:500], url)
+
+
 # ---------- progress chart (drawing is computed here, then painted on a canvas) ----------
 METRICS = {
     "My take": lambda h: h["sale"] - h["cut"],
@@ -833,6 +892,8 @@ class App:
         self.cur = None
         self.saved = False
         self.edit_idx = None   # index of the history entry being edited, or None
+        self.checking = False  # an update check is running
+        self.update_result = None
         self.busy = False
         self._status_job = None
 
@@ -966,10 +1027,13 @@ class App:
         root.rowconfigure(1, weight=1)
 
         head = ttk.Frame(root)
-        head.grid(row=0, column=0, columnspan=2, sticky="w", padx=20, pady=(12, 8))
+        head.grid(row=0, column=0, columnspan=2, sticky="ew", padx=20, pady=(12, 8))
         if self.logo_header:
             ttk.Label(head, image=self.logo_header).pack(side="left", padx=(0, 12))
         ttk.Label(head, text="THE BENEFACTOR", style="Title.TLabel").pack(side="left")
+        self.update_btn = ttk.Button(head, text="Check for updates", command=self.on_check_update)
+        self.update_btn.pack(side="right")
+        ttk.Label(head, text=f"v{APP_VERSION}", style="Status.TLabel").pack(side="right", padx=(0, 12))
 
         left = ttk.Frame(root)
         left.grid(row=1, column=0, sticky="ns", padx=(20, 10), pady=(0, 6))
@@ -1444,6 +1508,50 @@ class App:
         self.refresh()
         self.say(f"Deleted the entry from {removed['date']} for {name}.")
         return None
+
+    def on_check_update(self):
+        """Look for a newer release without freezing the window."""
+        if self.checking:
+            return
+        self.checking = True
+        self.update_result = None
+        self.update_btn.configure(text="Checking...")
+        self.update_btn.state(["disabled"])
+        threading.Thread(target=self._update_worker, daemon=True).start()
+        self.root.after(150, self._poll_update)
+
+    def _update_worker(self):
+        try:
+            self.update_result = check_latest_release()
+        except Exception as e:                     # never let the background check crash silently
+            self.update_result = ("error", f"Something went wrong: {e}")
+
+    def _poll_update(self):
+        if self.update_result is None:
+            self.root.after(150, self._poll_update)
+            return
+        result, self.update_result = self.update_result, None
+        self.checking = False
+        self.update_btn.configure(text="Check for updates")
+        self.update_btn.state(["!disabled"])
+        self.show_update_result(result)
+
+    def show_update_result(self, result):
+        kind = result[0]
+        if kind == "new":
+            _, tag, notes, url = result
+            msg = f"A new version is available: {tag}\nYou have: v{APP_VERSION}"
+            if notes:
+                msg += f"\n\nWhat's new:\n{notes}"
+            msg += "\n\nOpen the download page?"
+            if messagebox.askyesno("Update available", msg):
+                webbrowser.open(url)
+        elif kind == "current":
+            messagebox.showinfo("The Benefactor", f"You're up to date.\n\nYou have v{APP_VERSION} (newest: {result[1]}).")
+        elif kind == "none":
+            messagebox.showinfo("The Benefactor", f"You have v{APP_VERSION}.\n\nNo newer release has been published yet.")
+        else:
+            messagebox.showerror("The Benefactor", f"Couldn't check for updates.\n\n{result[1]}")
 
     def begin_edit(self, idx):
         p = self.profile()
