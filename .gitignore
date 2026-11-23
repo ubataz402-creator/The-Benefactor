@@ -1,0 +1,15 @@
+# Your clients' data - never commit this
+profiles.json
+profiles.json.damaged-*
+
+# Build output
+*.exe
+build/
+dist/
+*.spec
+benefactor_main.py
+TheBenefactorSetup.exe
+
+# Python
+__pycache__/
+*.pyc
