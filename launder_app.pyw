@@ -48,7 +48,7 @@ GOLD, GOLD2, RED, VIP = "#d4a94f", "#f0cd7a", "#d77a6a", "#c58be0"
 FONT = "Segoe UI"
 TYPE_COLOR = {"vip": VIP, "regular": GOLD}
 
-APP_VERSION = "1.9"  # shown in the title bar so you can tell which build you are running
+APP_VERSION = "1.10"  # shown in the title bar so you can tell which build you are running
 START_W, START_H = 1136, 680  # the window opens at this size every time
 
 # ---------- logo (The Benefactor), embedded so no extra files are needed ----------
@@ -883,6 +883,101 @@ class NewClientDialog:
         return self.result
 
 
+def is_money_text(text):
+    """Typing filter for price boxes: digits with up to 2 decimals."""
+    return re.fullmatch(r"\d{0,7}(\.\d{0,2})?", text) is not None
+
+
+def show_price(v):
+    return str(int(v)) if float(v) == int(v) else f"{v:.2f}"
+
+
+class PricesDialog:
+    """Modal window to edit the Regular / VIP prices and the sale value of each bag."""
+
+    def __init__(self, parent):
+        self.result = None
+        self.top = tk.Toplevel(parent)
+        self.top.title("Edit prices")
+        self.top.configure(bg=PANEL)
+        self.top.resizable(False, False)
+        self.top.transient(parent)
+
+        body = ttk.Frame(self.top, style="Card.TFrame", padding=18)
+        body.pack(fill="both", expand=True)
+        for col, head in enumerate(("", "Regular", "VIP", "Sale value"), start=0):
+            ttk.Label(body, text=head, style="Head.TLabel").grid(row=0, column=col, padx=6, pady=(0, 6), sticky="e" if col else "w")
+        vcmd = (self.top.register(is_money_text), "%P")
+        self.vars = {}          # (column, bag) -> StringVar
+        self.boxes = []
+        for r, key in enumerate(L.NAMES, start=1):
+            ttk.Label(body, text=L.NAMES[key], style="Bold.TLabel").grid(row=r, column=0, sticky="w", padx=(0, 14), pady=4)
+            for col, which in enumerate(("regular", "vip", "sale"), start=1):
+                var = tk.StringVar()
+                self.vars[(which, key)] = var
+                box = ttk.Entry(body, textvariable=var, width=10, justify="right", validate="key", validatecommand=vcmd)
+                box.grid(row=r, column=col, padx=6, pady=4)
+                self.boxes.append(box)
+        self.fill(L.SALE, L.CUT)
+
+        ttk.Label(body, text="Prices apply to new entries. Entries you already saved keep the price they\n"
+                             "were saved with (editing a saved entry recalculates it at today's prices).",
+                  style="Muted.TLabel", justify="left").grid(row=4, column=0, columnspan=4, sticky="w", pady=(12, 0))
+        self.error = ttk.Label(body, text="", style="Card.TLabel", foreground=RED, justify="left", wraplength=420)
+        self.error.grid(row=5, column=0, columnspan=4, sticky="w", pady=(8, 0))
+
+        btns = ttk.Frame(body, style="Card.TFrame")
+        btns.grid(row=6, column=0, columnspan=4, sticky="ew", pady=(14, 0))
+        ttk.Button(btns, text="Reset to defaults", command=self.reset).pack(side="left")
+        ttk.Button(btns, text="Save", style="Accent.TButton", command=self.ok).pack(side="right")
+        ttk.Button(btns, text="Cancel", command=self.cancel).pack(side="right", padx=(0, 8))
+
+        self.top.bind("<Return>", lambda e: self.ok())
+        self.top.bind("<Escape>", lambda e: self.cancel())
+        self.top.protocol("WM_DELETE_WINDOW", self.cancel)
+        self.top.update_idletasks()
+        x = parent.winfo_rootx() + (parent.winfo_width() - self.top.winfo_width()) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - self.top.winfo_height()) // 3
+        self.top.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        self.top.grab_set()
+        if self.boxes:
+            self.boxes[0].focus_set()
+
+    def fill(self, sale, cut):
+        for key in L.NAMES:
+            self.vars[("sale", key)].set(show_price(sale[key]))
+            for which in ("regular", "vip"):
+                self.vars[(which, key)].set(show_price(cut[which][key]))
+
+    def reset(self):
+        self.fill(L.DEFAULT_SALE, L.DEFAULT_CUT)
+        self.error.configure(text="")
+
+    def ok(self):
+        sale, cut = {}, {"regular": {}, "vip": {}}
+        try:
+            for key in L.NAMES:
+                sale[key] = float(self.vars[("sale", key)].get())
+                for which in ("regular", "vip"):
+                    cut[which][key] = float(self.vars[(which, key)].get())
+        except ValueError:
+            self.error.configure(text="Fill in every price box with a number.")
+            return
+        err = L.validate_prices(sale, cut)
+        if err:
+            self.error.configure(text=err)
+            return
+        self.result = (sale, cut)
+        self.top.destroy()
+
+    def cancel(self):
+        self.top.destroy()
+
+    def show(self):
+        self.top.wait_window()
+        return self.result
+
+
 class App:
     def __init__(self, root, path):
         self.root = root
@@ -1033,6 +1128,7 @@ class App:
         ttk.Label(head, text="THE BENEFACTOR", style="Title.TLabel").pack(side="left")
         self.update_btn = ttk.Button(head, text="Check for updates", command=self.on_check_update)
         self.update_btn.pack(side="right")
+        ttk.Button(head, text="Edit prices", command=self.on_prices).pack(side="right", padx=(0, 8))
         ttk.Label(head, text=f"v{APP_VERSION}", style="Status.TLabel").pack(side="right", padx=(0, 12))
 
         left = ttk.Frame(root)
@@ -1507,6 +1603,27 @@ class App:
                 self.edit_idx -= 1
         self.refresh()
         self.say(f"Deleted the entry from {removed['date']} for {name}.")
+        return None
+
+    def on_prices(self):
+        res = PricesDialog(self.root).show()
+        if not res:
+            return
+        err = self.apply_prices(*res)
+        if err:
+            messagebox.showerror("The Benefactor", err)
+        else:
+            self.say("Prices updated. New entries use them; saved entries keep their old prices.")
+
+    def apply_prices(self, sale, cut):
+        """Save and use new prices. Returns an error message, or None on success."""
+        try:
+            L.save_prices(sale, cut)
+        except ValueError as e:
+            return str(e)
+        except OSError as e:
+            return f"Couldn't save the prices.\n\n{L.PRICES_FILE}\n\n{e}"
+        self.refresh()
         return None
 
     def on_check_update(self):

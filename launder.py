@@ -26,6 +26,7 @@ Usage:
 """
 import argparse
 import json
+import math
 import os
 import shutil
 import sys
@@ -62,12 +63,17 @@ def default_profiles_file():
 
 DEFAULT_FILE = default_profiles_file()
 
-SALE = {"big": 1500, "avg": 750, "small": 300}
-CUT = {
+# Built-in prices. They can be changed (Edit prices in the app); changes are kept in prices.json
+# in the same folder as profiles.json and loaded on start-up.
+DEFAULT_SALE = {"big": 1500, "avg": 750, "small": 300}
+DEFAULT_CUT = {
     "regular": {"big": 750, "avg": 400, "small": 150},
     "vip": {"big": 1000, "avg": 500, "small": 200},
 }
+SALE = dict(DEFAULT_SALE)                                   # live prices (updated in place)
+CUT = {t: dict(v) for t, v in DEFAULT_CUT.items()}
 NAMES = {"big": "Big bag of cash", "avg": "Avg bag of cash", "small": "Small bag of cash"}
+PRICES_FILE = os.path.join(os.path.dirname(DEFAULT_FILE), "prices.json")
 
 
 def money(x):
@@ -118,6 +124,69 @@ def find(data, name):
 
 
 # ---------- calculation ----------
+
+def _valid_price(v):
+    return (isinstance(v, (int, float)) and not isinstance(v, bool)
+            and math.isfinite(v) and 0 < v <= 10_000_000)
+
+
+def _tidy(v):
+    v = round(float(v), 2)
+    return int(v) if v == int(v) else v
+
+
+def validate_prices(sale, cut):
+    """Return a plain-English error, or None if these prices are usable."""
+    for k in NAMES:
+        s = sale.get(k)
+        if not _valid_price(s):
+            return f"{NAMES[k]}: enter a sale value above 0."
+        for t in ("regular", "vip"):
+            c = (cut.get(t) or {}).get(k)
+            if not _valid_price(c):
+                return f"{NAMES[k]} ({label(t)}): enter a price above 0."
+            if c > s:
+                return f"{NAMES[k]} ({label(t)}): can't be higher than the sale value ({money(s)})."
+    return None
+
+
+def apply_prices(sale, cut):
+    """Make these the live prices (the tables are updated in place, so everything sees them)."""
+    for k in NAMES:
+        SALE[k] = _tidy(sale[k])
+        for t in ("regular", "vip"):
+            CUT[t][k] = _tidy(cut[t][k])
+
+
+def load_prices(path=None):
+    """Load saved price changes. A missing or damaged file just leaves the built-in prices."""
+    try:
+        with open(path or PRICES_FILE) as f:
+            raw = json.load(f)
+        sale = {k: raw["sale"][k] for k in NAMES}
+        cut = {t: {k: raw["cut"][t][k] for k in NAMES} for t in ("regular", "vip")}
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    if validate_prices(sale, cut):
+        return False
+    apply_prices(sale, cut)
+    return True
+
+
+def save_prices(sale, cut, path=None):
+    """Validate, save to prices.json, and make the prices live. Raises ValueError / OSError."""
+    err = validate_prices(sale, cut)
+    if err:
+        raise ValueError(err)
+    path = path or PRICES_FILE
+    data = {"sale": {k: _tidy(sale[k]) for k in NAMES},
+            "cut": {t: {k: _tidy(cut[t][k]) for k in NAMES} for t in ("regular", "vip")}}
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, path)
+    apply_prices(sale, cut)
+
 
 def build_lines(client_type, counts):
     lines = []
@@ -330,6 +399,8 @@ def main():
     n = len(profile["history"])
     print(f"Saved. {name}'s lifetime cut: {money(t_cut)} over {n} {'entry' if n == 1 else 'entries'}.\n")
 
+
+load_prices()
 
 if __name__ == "__main__":
     main()

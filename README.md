@@ -25,9 +25,17 @@ Needs Python 3 (with tkinter, included in the standard Windows installer).
 2. Double-click `build_exe.bat` -> `The Benefactor.exe`.
 3. Install [Inno Setup](https://jrsoftware.org/isinfo.php), right-click `TheBenefactor.iss` -> Compile -> `TheBenefactorSetup.exe`.
 
+## Prices
+
+Click **Edit prices** (top right) to change what Regular and VIP clients are paid per bag, and the
+sale value of each bag. Changes apply to new entries; entries you already saved keep the price they
+were saved with. Prices are stored in `prices.json` next to `profiles.json`, and the command-line
+version uses them too. **Reset to defaults** in that window restores the built-in prices
+(then click Save).
+
 ## Your data
 
-Clients are saved in `%APPDATA%\The Benefactor\profiles.json`, outside the
+Clients are saved in `%APPDATA%\The Benefactor\profiles.json` (prices in `prices.json` beside it), outside the
 install folder, so updating or uninstalling never deletes them. Back that file up
 before big updates. It is deliberately listed in `.gitignore`.
 
