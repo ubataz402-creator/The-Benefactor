@@ -177,8 +177,8 @@ BUBBLE_ASSETS = {
     ),
 }
 
-APP_VERSION = "1.16"  # shown in the title bar so you can tell which build you are running
-START_W, START_H = 1136, 680  # the window opens at this size every time
+APP_VERSION = "1.17"  # shown in the title bar so you can tell which build you are running
+START_W, START_H = 1460, 855  # the window opens at this size every time
 
 # ---------- logo (The Benefactor), embedded so no extra files are needed ----------
 LOGO_ICON_B64 = (
