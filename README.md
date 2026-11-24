@@ -59,3 +59,9 @@ Until a release exists, the button says "No newer release has been published yet
 Change the files, bump `APP_VERSION` in `launder_app.pyw` and `AppVersion` in
 `TheBenefactor.iss`, then rebuild the .exe and recompile the installer.
 Publish `TheBenefactorSetup.exe` as a GitHub Release (not in the repository files).
+
+## Look
+
+Version 1.11 uses a rounded, glossy "bubble" look (cards, buttons, fields, tabs). If it can't be
+applied on a machine, the app quietly falls back to the plain flat look. To force the flat look,
+run `python launder_app.pyw --classic` or set the environment variable `BENEFACTOR_CLASSIC=1`.
