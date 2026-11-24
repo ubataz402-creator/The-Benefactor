@@ -45,6 +45,7 @@ except ImportError:
 # ---------- look ----------
 BG, PANEL, PANEL2, LINE = "#0e1a12", "#14261a", "#1a3221", "#23452d"
 TEXT, MUTED = "#ece4d6", "#a1b5a5"
+FIELD = "#0f1b13"                      # text-box body colour
 GOLD, GOLD2, RED, VIP = "#d4a94f", "#f0cd7a", "#d77a6a", "#c58be0"
 FONT = "Segoe UI"
 TYPE_COLOR = {"vip": VIP, "regular": GOLD}
@@ -176,7 +177,7 @@ BUBBLE_ASSETS = {
     ),
 }
 
-APP_VERSION = "1.15"  # shown in the title bar so you can tell which build you are running
+APP_VERSION = "1.16"  # shown in the title bar so you can tell which build you are running
 START_W, START_H = 1136, 680  # the window opens at this size every time
 
 # ---------- logo (The Benefactor), embedded so no extra files are needed ----------
@@ -1626,7 +1627,7 @@ class App:
             st.layout("TNotebook.Tab", swap(keep["TNotebook.Tab"], "Notebook.tab", "Bubble.tab"))
 
             # the text areas and the dropdown arrow must match the rounded field's body colour
-            field = "#0f1b13"
+            field = FIELD
             st.configure("TEntry", fieldbackground=field, padding=(4, 2))
             st.configure("TCombobox", fieldbackground=field, background=field, bordercolor=field,
                          lightcolor=field, darkcolor=field, arrowcolor=GOLD, padding=(4, 2))
