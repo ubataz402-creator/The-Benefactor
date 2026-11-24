@@ -4,7 +4,7 @@
 ; so installing, updating or uninstalling never touches your client data.
 
 #define AppName "The Benefactor"
-#define AppVersion "1.14"
+#define AppVersion "1.15"
 #define AppExe "The Benefactor.exe"
 
 [Setup]

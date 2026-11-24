@@ -176,7 +176,7 @@ BUBBLE_ASSETS = {
     ),
 }
 
-APP_VERSION = "1.14"  # shown in the title bar so you can tell which build you are running
+APP_VERSION = "1.15"  # shown in the title bar so you can tell which build you are running
 START_W, START_H = 1136, 680  # the window opens at this size every time
 
 # ---------- logo (The Benefactor), embedded so no extra files are needed ----------
@@ -1101,13 +1101,13 @@ def paint_scene(cv, prims):
             cv.create_text(p["x"], p["y"], text=p["text"], fill=p["color"], font=("Georgia", p["size"], "bold"))
 
 
-TILE_GLYPHS = {"history": "clock", "clients": "people", "progress": "chart"}
+TILE_GLYPHS = {"history": "clock", "clients": "people", "progress": "chart", "notes": "page"}
 
 
 class Tile(tk.Canvas):
     """A big rounded menu tile: icon, title and a small caption. Click to open its page."""
 
-    W, H = 168, 60
+    W, H = 150, 60
 
     def __init__(self, parent, title, sub, glyph, command):
         super().__init__(parent, width=self.W, height=self.H, bg=PANEL, highlightthickness=0, bd=0, cursor="hand2")
@@ -1150,6 +1150,10 @@ class Tile(tk.Canvas):
         elif g == "people":
             self.create_oval(cx - 4, cy - 10, cx + 4, cy - 2, outline=ink, width=2)
             self.create_arc(cx - 10, cy, cx + 10, cy + 20, start=0, extent=180, style="arc", outline=ink, width=2)
+        elif g == "page":
+            self.create_rectangle(cx - 8, cy - 10, cx + 8, cy + 10, outline=ink, width=2)
+            for dy in (-4, 1, 6):
+                self.create_line(cx - 4, cy + dy, cx + 4, cy + dy, fill=ink, width=1)
         else:
             self.create_line(cx - 10, cy + 9, cx + 10, cy + 9, fill=ink, width=2)
             self.create_line(cx - 10, cy + 5, cx - 3, cy - 2, cx + 2, cy + 2, cx + 10, cy - 8, fill=ink, width=2)
@@ -1460,6 +1464,9 @@ class App:
         self.update_result = None
         self.busy = False
         self._status_job = None
+        self.notes_for = None      # the client whose text is in the notes box
+        self.notes_dirty = False   # typed but not yet saved
+        self._notes_job = None
 
         root.title(f"The Benefactor  v{APP_VERSION}")
         root.configure(bg=BG)
@@ -1468,6 +1475,7 @@ class App:
         self.setup_style()
         self.setup_logo()
         self.build()
+        root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.center(START_W, START_H)
         self.refresh()
 
@@ -1793,11 +1801,34 @@ class App:
         self.tabs.add(prog_page, text="Progress")
         self.tiles = []
         for i, (title, sub, glyph) in enumerate((("History", "", "history"), ("All clients", "", "clients"),
-                                                 ("Progress", "lifetime graph", "progress"))):
+                                                 ("Progress", "lifetime graph", "progress"),
+                                                 ("Notes", "", "notes"))):
             tile = Tile(self.tile_bar, title, sub, glyph, lambda i=i: self.tabs.select(i))
             tile.pack(side="left", padx=(0, 10))
             self.tiles.append(tile)
         self.tabs.bind("<<NotebookTabChanged>>", self.on_tab_changed, add="+")
+
+        notes_page = ttk.Frame(self.tabs, style="Card.TFrame", padding=(0, 8, 0, 0))
+        self.tabs.add(notes_page, text="Notes")
+        self.notes_title = ttk.Label(notes_page, text="", style="Gold.TLabel")
+        self.notes_title.pack(anchor="w", padx=4, pady=(0, 6))
+        nbar = ttk.Frame(notes_page, style="Card.TFrame")
+        nbar.pack(side="bottom", fill="x", pady=(8, 0))
+        self.notes_btn = button(nbar, text="Save notes", style="Accent.TButton", command=self.flush_notes)
+        self.notes_btn.pack(side="left")
+        self.notes_state = ttk.Label(nbar, text="", style="Muted.TLabel")
+        self.notes_state.pack(side="left", padx=12)
+        box = ttk.Frame(notes_page, style="Inset.TFrame", padding=8)
+        box.pack(fill="both", expand=True)
+        self.notes_text = tk.Text(box, wrap="word", height=8, bg=FIELD, fg=TEXT, insertbackground=GOLD2,
+                                  selectbackground=LINE, selectforeground=TEXT, relief="flat", bd=0,
+                                  highlightthickness=0, font=(FONT, 11), padx=6, pady=4, undo=True)
+        nscroll = ttk.Scrollbar(box, orient="vertical", command=self.notes_text.yview)
+        self.notes_text.configure(yscrollcommand=nscroll.set)
+        nscroll.pack(side="right", fill="y")
+        self.notes_text.pack(side="left", fill="both", expand=True)
+        for ev in ("<KeyRelease>", "<<Paste>>", "<<Cut>>"):
+            self.notes_text.bind(ev, self.on_notes_edit, add="+")
         ctl = ttk.Frame(prog_page, style="Card.TFrame")
         ctl.pack(fill="x", padx=4, pady=(0, 6))
         ttk.Label(ctl, text="Show running total of", style="Card.TLabel").pack(side="left")
@@ -1954,6 +1985,62 @@ class App:
         if dx or dy:
             cv.move("tip", dx, dy)
 
+    # ----- notes -----
+
+    def on_notes_edit(self, _event=None):
+        if self.notes_for is None:
+            return
+        self.notes_dirty = True
+        self.notes_state.configure(text="Unsaved changes...")
+        if self._notes_job:
+            self.root.after_cancel(self._notes_job)
+        self._notes_job = self.root.after(1200, self.flush_notes)      # saves itself after you stop typing
+
+    def notes_value(self):
+        return self.notes_text.get("1.0", "end-1c")[:20000]
+
+    def flush_notes(self):
+        """Save the notes box to the client it belongs to (no-op when nothing changed)."""
+        if self._notes_job:
+            self.root.after_cancel(self._notes_job)
+            self._notes_job = None
+        if not self.notes_dirty or not self.notes_for:
+            return
+        text = self.notes_value()
+        data = L.load(self.path)
+        name = L.find(data, self.notes_for)
+        self.notes_dirty = False
+        if name:
+            data[name]["notes"] = text
+            self.write(data)
+            self.notes_state.configure(text="Saved.")
+
+    def show_notes(self):
+        """Put the current client's notes in the box (unless it already holds them)."""
+        p = self.profile()
+        if (self.cur if p else None) == self.notes_for:
+            return
+        self.notes_for = self.cur if p else None
+        self.notes_dirty = False
+        self.notes_text.configure(state="normal")
+        self.notes_text.delete("1.0", "end")
+        self.notes_text.edit_reset()
+        if p:
+            self.notes_text.insert("1.0", p.get("notes", ""))
+            self.notes_title.configure(text=f"Notes for {self.cur}")
+            self.notes_state.configure(text="Saves automatically as you type.")
+        else:
+            self.notes_title.configure(text="Pick or create a client to keep notes.")
+            self.notes_state.configure(text="")
+            self.notes_text.configure(state="disabled")
+        self.notes_btn.state(["!disabled" if p else "disabled"])
+
+    def on_close(self):
+        try:
+            self.flush_notes()
+        finally:
+            self.root.destroy()
+
     def on_root_resize(self, event):
         if event.widget is not self.root:
             return
@@ -1982,9 +2069,12 @@ class App:
         self.tiles[0].set_sub(f"{n} entr{'y' if n == 1 else 'ies'}" if p else "pick a client")
         k = len(self.names)
         self.tiles[1].set_sub(f"{k} client{'' if k == 1 else 's'}")
+        self.tiles[3].set_sub(("has notes" if (p.get("notes") or "").strip() or (self.notes_dirty and self.notes_value().strip()) else "empty") if p else "pick a client")
         self.on_tab_changed()
 
     def refresh(self):
+        if self.notes_dirty and self.notes_for != self.cur:
+            self.flush_notes()                      # you switched client with unsaved notes
         self.data = L.load(self.path)
         self.names = sorted(self.data, key=str.lower)
         n = len(self.names)
@@ -2013,6 +2103,7 @@ class App:
             else:
                 lbl.configure(text=f"sale {sale}")
         self.update_edit_ui()
+        self.show_notes()
         self.update_tiles()
         for tree, cols in ((self.calc_tree, self.calc_cols), (self.hist_tree, self.hist_cols)):
             tree.heading("cut", text=self.label())
@@ -2139,6 +2230,7 @@ class App:
 
     def edit_client(self, old, new_name, ctype, reprice=False):
         """Rename / change type of a client. Returns an error message, or None on success."""
+        self.flush_notes()
         data = L.load(self.path)
         err = L.update_client(data, old, new_name, ctype, reprice)
         if err:
@@ -2158,6 +2250,7 @@ class App:
                                    f"Delete {self.cur} and all of their history?\nThis can't be undone."):
             return
         name = self.cur
+        self.notes_dirty = False
         data = L.load(self.path)
         data.pop(L.find(data, name) or name, None)
         self.write(data)

@@ -72,3 +72,5 @@ run `python launder_app.pyw --classic` or set the environment variable `BENEFACT
 - The History / All clients / Progress menu is now a row of tiles.
 - **Edit client** (Client card) renames a client and/or switches VIP/Regular. Past entries keep the
   amounts they were saved with, unless you tick "Recalculate their past entries at the new prices".
+
+- **Notes** (v1.15): a Notes tile keeps free-text notes for each client. They save automatically as you type, and stay with the client when you rename them.
