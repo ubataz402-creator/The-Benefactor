@@ -29,6 +29,7 @@ sys.path.insert(0, HERE)
 
 import tkinter as tk
 from tkinter import messagebox, ttk
+import tkinter.font as tkfont
 
 try:
     import launder as L
@@ -481,7 +482,7 @@ BUBBLE_ASSETS = {
     ),
 }
 
-APP_VERSION = "1.12"  # shown in the title bar so you can tell which build you are running
+APP_VERSION = "1.13"  # shown in the title bar so you can tell which build you are running
 START_W, START_H = 1136, 680  # the window opens at this size every time
 
 # ---------- logo (The Benefactor), embedded so no extra files are needed ----------
@@ -1348,6 +1349,129 @@ def build_scene(series, w, h, selected=None):
     return prims, hits
 
 
+BUBBLE_ON = False
+
+
+def set_bubble(flag):
+    global BUBBLE_ON
+    BUBBLE_ON = bool(flag)
+
+
+def rrect_points(x0, y0, x1, y1, r):
+    """Outline of a rounded rectangle, for a smoothed canvas polygon."""
+    r = max(0, min(r, (x1 - x0) / 2, (y1 - y0) / 2))
+    return [x0 + r, y0, x0 + r, y0, x1 - r, y0, x1 - r, y0, x1, y0, x1, y0 + r, x1, y0 + r, x1, y1 - r, x1, y1 - r,
+            x1, y1, x1 - r, y1, x1 - r, y1, x0 + r, y1, x0 + r, y1, x0, y1, x0, y1 - r, x0, y1 - r, x0, y0 + r,
+            x0, y0 + r, x0, y0]
+
+
+BUTTON_KINDS = {            # fill, rim, text colour
+    "btn": (PANEL2, "#4a423a", TEXT),
+    "acc": (GOLD, GOLD2, "#1a1509"),
+    "sml": ("#2a2420", "#4a423a", TEXT),
+    "stp": (PANEL2, "#4a423a", TEXT),
+}
+
+
+def button_scene(kind, w, h, state="normal"):
+    """Shapes for one bubble button; state is normal / hover / pressed / disabled."""
+    fill, rim, fg = BUTTON_KINDS.get(kind, BUTTON_KINDS["btn"])
+    if state == "hover":
+        fill, rim = mix(fill, "#ffffff", 0.10), (GOLD2 if kind != "acc" else "#ffffff")
+    elif state == "pressed":
+        fill = mix(fill, "#000000", 0.18)
+    elif state == "disabled":
+        fill, rim, fg = mix(fill, PANEL, 0.55), mix(rim, PANEL, 0.6), MUTED
+    r = h / 2
+    pill = kind != "stp"
+    shapes = [{"t": "rrect", "box": (1, 1, w - 1, h - 1), "r": r, "fill": rim},
+              {"t": "rrect", "box": (2, 2, w - 2, h - 2), "r": r - 1, "fill": fill}]
+    gloss = 0.28 if kind == "acc" else 0.12
+    if state == "disabled":
+        gloss = 0.03
+    shapes.append({"t": "rrect", "box": (h * 0.35 if pill else 6, 4, w - (h * 0.35 if pill else 6), h * 0.48),
+                   "r": h * 0.22, "fill": mix(fill, "#ffffff", gloss)})
+    off = 1 if state == "pressed" else 0
+    return shapes, (w / 2, h / 2 + off, fg)
+
+
+class BubbleButton(tk.Canvas):
+    """A rounded, glossy button drawn by hand. Supports the bits of ttk.Button the app uses:
+    configure(text=...), state([...]) and a command."""
+
+    def __init__(self, parent, text="", command=None, kind="btn"):
+        self.kind, self.command, self.text = kind, command, text
+        self.disabled = self.hover = self.down = False
+        self.font = tkfont.Font(family=FONT, size=9 if kind == "sml" else 10,
+                                weight="bold" if kind == "acc" else "normal")
+        w, h = self.fit()
+        super().__init__(parent, width=w, height=h, bg=PANEL, highlightthickness=0, bd=0, takefocus=1)
+        self.bind("<Enter>", lambda e: self.flag("hover", True))
+        self.bind("<Leave>", lambda e: (self.flag("hover", False), self.flag("down", False)))
+        self.bind("<ButtonPress-1>", lambda e: self.flag("down", True))
+        self.bind("<ButtonRelease-1>", self.on_release)
+        self.bind("<space>", lambda e: self.invoke())
+        self.bind("<Return>", lambda e: self.invoke())
+        self.draw()
+
+    def fit(self):
+        if self.kind == "stp":
+            return 32, 32
+        return max(self.font.measure(self.text) + (36 if self.kind != "sml" else 28), 64), (28 if self.kind == "sml" else 34)
+
+    def flag(self, name, value):
+        if getattr(self, name) != value:
+            setattr(self, name, value)
+            self.draw()
+
+    def on_release(self, e):
+        was = self.down
+        self.flag("down", False)
+        if was and 0 <= e.x <= int(self.cget("width")) and 0 <= e.y <= int(self.cget("height")):
+            self.invoke()
+
+    def invoke(self):
+        if not self.disabled and self.command:
+            self.command()
+
+    def configure(self, cnf=None, **kw):
+        if "text" in kw:
+            self.text = kw.pop("text")
+            w, h = self.fit()
+            kw.update(width=w, height=h)
+        result = super().configure(cnf, **kw) if (cnf or kw) else super().configure()
+        self.draw()
+        return result
+
+    config = configure
+
+    def state(self, spec=None):
+        for s in spec or []:
+            if s == "disabled":
+                self.disabled = True
+            elif s == "!disabled":
+                self.disabled = False
+        self.configure(cursor="arrow" if self.disabled else "hand2")
+        return ()
+
+    def draw(self):
+        self.delete("all")
+        w, h = int(self.cget("width")), int(self.cget("height"))
+        st = "disabled" if self.disabled else ("pressed" if self.down else ("hover" if self.hover else "normal"))
+        shapes, (tx, ty, fg) = button_scene(self.kind, w, h, st)
+        for sh in shapes:
+            self.create_polygon(*rrect_points(*sh["box"], sh["r"]), smooth=True, fill=sh["fill"], outline="")
+        self.create_text(tx, ty, text=self.text, fill=fg, font=self.font)
+
+
+def button(parent, text="", command=None, style=None):
+    """A bubble button when the bubble look is on, otherwise the plain ttk button."""
+    if BUBBLE_ON:
+        kind = {"Accent.TButton": "acc", "Danger.TButton": "sml", "Step.TButton": "stp"}.get(style, "btn")
+        return BubbleButton(parent, text, command, kind)
+    return ttk.Button(parent, text=text, command=command, **({"style": style} if style else {}))
+
+
 class NewClientDialog:
     """Small modal window asking for a name and VIP/regular."""
 
@@ -1377,8 +1501,8 @@ class NewClientDialog:
 
         btns = ttk.Frame(body, style="Card.TFrame")
         btns.grid(row=4, column=0, columnspan=2, sticky="e", pady=(12, 0))
-        ttk.Button(btns, text="Cancel", command=self.cancel).pack(side="left", padx=(0, 8))
-        ttk.Button(btns, text="Create", style="Accent.TButton", command=self.ok).pack(side="left")
+        button(btns, text="Cancel", command=self.cancel).pack(side="left", padx=(0, 8))
+        button(btns, text="Create", style="Accent.TButton", command=self.ok).pack(side="left")
 
         self.top.bind("<Return>", lambda e: self.ok())
         self.top.bind("<Escape>", lambda e: self.cancel())
@@ -1455,9 +1579,9 @@ class PricesDialog:
 
         btns = ttk.Frame(body, style="Card.TFrame")
         btns.grid(row=6, column=0, columnspan=4, sticky="ew", pady=(14, 0))
-        ttk.Button(btns, text="Reset to defaults", command=self.reset).pack(side="left")
-        ttk.Button(btns, text="Save", style="Accent.TButton", command=self.ok).pack(side="right")
-        ttk.Button(btns, text="Cancel", command=self.cancel).pack(side="right", padx=(0, 8))
+        button(btns, text="Reset to defaults", command=self.reset).pack(side="left")
+        button(btns, text="Save", style="Accent.TButton", command=self.ok).pack(side="right")
+        button(btns, text="Cancel", command=self.cancel).pack(side="right", padx=(0, 8))
 
         self.top.bind("<Return>", lambda e: self.ok())
         self.top.bind("<Escape>", lambda e: self.cancel())
@@ -1560,7 +1684,7 @@ class App:
                      bordercolor=LINE, lightcolor=PANEL2, darkcolor=PANEL2,
                      troughcolor=PANEL, font=(FONT, 10))
         st.configure("TFrame", background=BG)
-        st.configure("Card.TFrame", background=PANEL, bordercolor=LINE, relief="solid", borderwidth=1)
+        st.configure("Card.TFrame", background=PANEL, borderwidth=0, relief="flat")
         st.configure("TLabel", background=BG, foreground=TEXT)
         st.configure("Card.TLabel", background=PANEL, foreground=TEXT)
         st.configure("Bold.TLabel", background=PANEL, foreground=TEXT, font=bold)
@@ -1624,7 +1748,8 @@ class App:
                foreground=[("selected", GOLD2)],
                background=[("selected", PANEL2), ("active", PANEL2)])
         st.configure("Vertical.TScrollbar", background=PANEL2, troughcolor=PANEL,
-                     bordercolor=PANEL, arrowcolor=MUTED)
+                     bordercolor=PANEL, arrowcolor=MUTED, lightcolor=PANEL2, darkcolor=PANEL2)
+        st.map("Vertical.TScrollbar", background=[("active", LINE), ("pressed", LINE)])
         self.setup_bubble(st)
 
     def setup_bubble(self, st):
@@ -1639,8 +1764,7 @@ class App:
             keep = {n: st.layout(n) for n in ("TFrame", "TButton", "TEntry", "TCombobox", "TNotebook.Tab")}
         except tk.TclError:
             return                                   # this theme has no such layouts: stay flat
-        custom = {"Bubble.TFrame": "TFrame", "Inset.TFrame": "TFrame", "Accent.TButton": "TButton",
-                  "Danger.TButton": "TButton", "Step.TButton": "TButton"}
+        custom = {"Bubble.TFrame": "TFrame", "Inset.TFrame": "TFrame"}
         try:
             for name, (_b, _w, _h, data) in BUBBLE_ASSETS.items():
                 self.bubble_imgs[name] = tk.PhotoImage(name="bub_" + name, data=data)
@@ -1649,16 +1773,8 @@ class App:
                 st.element_create(element, "image", "bub_" + pic, *[(*s[:-1], "bub_" + s[-1]) for s in states],
                                   sticky="nswe", **opts)
 
-            def button(element, p, border, w, h, pad):
-                elem(element, p + "_n", [("disabled", p + "_d"), ("pressed", p + "_p"), ("active", p + "_h")],
-                     border=border, width=w, height=h, padding=pad)
-
             elem("Bubble.card", "card", border=22, width=44, height=44, padding=0)
             elem("Bubble.inset", "inset", border=12, width=24, height=24, padding=0)
-            button("Bubble.btn", "btn", 16, 40, 36, (6, 2))
-            button("Bubble.acc", "acc", 16, 40, 36, (6, 2))
-            button("Bubble.sml", "sml", 12, 30, 28, (4, 1))
-            button("Bubble.stp", "stp", 15, 34, 34, (2, 2))
             elem("Bubble.field", "fld_n", [("disabled", "fld_d"), ("focus", "fld_f")],
                  border=12, width=30, height=32, padding=(8, 4))
             elem("Bubble.tab", "tab_n", [("selected", "tab_s"), ("active", "!selected", "tab_h")],
@@ -1670,15 +1786,14 @@ class App:
                     opts = dict(opts)
                     if "children" in opts:
                         opts["children"] = swap(opts["children"], old, new)
+                    if name == old:
+                        # "-border" would make Tk paint our (opaque) image AFTER its children, hiding the text
+                        opts.pop("border", None)
                     out.append((new if name == old else name, opts))
                 return out
 
             st.layout("Bubble.TFrame", [("Bubble.card", {"sticky": "nswe"})])
             st.layout("Inset.TFrame", [("Bubble.inset", {"sticky": "nswe"})])
-            st.layout("TButton", swap(keep["TButton"], "Button.border", "Bubble.btn"))
-            st.layout("Accent.TButton", swap(keep["TButton"], "Button.border", "Bubble.acc"))
-            st.layout("Danger.TButton", swap(keep["TButton"], "Button.border", "Bubble.sml"))
-            st.layout("Step.TButton", swap(keep["TButton"], "Button.border", "Bubble.stp"))
             st.layout("TEntry", swap(keep["TEntry"], "Entry.field", "Bubble.field"))
             st.layout("TCombobox", swap(keep["TCombobox"], "Combobox.field", "Bubble.field"))
             st.layout("TNotebook.Tab", swap(keep["TNotebook.Tab"], "Notebook.tab", "Bubble.tab"))
@@ -1692,10 +1807,11 @@ class App:
                    background=[("active", field), ("pressed", field)],
                    foreground=[("readonly", TEXT), ("disabled", MUTED)])
             st.configure("TNotebook", bordercolor=PANEL, lightcolor=PANEL, darkcolor=PANEL)
-            st.configure("Step.TButton", padding=(0, 0))
             self.check_bubble()
             self.bubble = True
+            set_bubble(True)
         except Exception:
+            set_bubble(False)
             for n, lay in keep.items():
                 st.layout(n, lay)
             for n, src in custom.items():
@@ -1712,8 +1828,8 @@ class App:
             f = ttk.Frame(top, style="Bubble.TFrame", padding=8)
             f.pack()
             ttk.Frame(f, style="Inset.TFrame", padding=4).pack()
-            for style in ("TButton", "Accent.TButton", "Danger.TButton", "Step.TButton"):
-                ttk.Button(f, text="x", style=style).pack()
+            for kind in ("btn", "acc", "sml", "stp"):
+                BubbleButton(f, "x", None, kind).pack()
             ttk.Entry(f).pack()
             ttk.Combobox(f, values=["a"], state="readonly").pack()
             nb = ttk.Notebook(f)
@@ -1756,9 +1872,9 @@ class App:
         if self.logo_header:
             ttk.Label(head, image=self.logo_header, style="Card.TLabel").pack(side="left", padx=(0, 12))
         ttk.Label(head, text="THE BENEFACTOR", style="CardTitle.TLabel").pack(side="left")
-        self.update_btn = ttk.Button(head, text="Check for updates", command=self.on_check_update)
+        self.update_btn = button(head, text="Check for updates", command=self.on_check_update)
         self.update_btn.pack(side="right")
-        ttk.Button(head, text="Edit prices", command=self.on_prices).pack(side="right", padx=(0, 8))
+        button(head, text="Edit prices", command=self.on_prices).pack(side="right", padx=(0, 8))
         ttk.Label(head, text=f"v{APP_VERSION}", style="Muted.TLabel").pack(side="right", padx=(0, 12))
 
         left = ttk.Frame(root)
@@ -1776,12 +1892,12 @@ class App:
         self.combo = ttk.Combobox(row, state="readonly", width=24)
         self.combo.pack(side="left", fill="x", expand=True)
         self.combo.bind("<<ComboboxSelected>>", self.on_pick_client)
-        ttk.Button(row, text="+ New", style="Accent.TButton", command=self.on_new).pack(side="left", padx=(8, 0))
+        button(row, text="+ New", style="Accent.TButton", command=self.on_new).pack(side="left", padx=(8, 0))
         row2 = ttk.Frame(cc, style="Card.TFrame")
         row2.pack(fill="x", pady=(10, 0))
         self.badge = ttk.Label(row2, text="", style="Bold.TLabel")
         self.badge.pack(side="left")
-        self.del_btn = ttk.Button(row2, text="Delete client", style="Danger.TButton", command=self.on_delete)
+        self.del_btn = button(row2, text="Delete client", style="Danger.TButton", command=self.on_delete)
         self.del_btn.pack(side="right")
 
         # --- bags card ---
@@ -1803,13 +1919,13 @@ class App:
             self.vars[key] = var
             box = ttk.Frame(grid, style="Card.TFrame")
             box.grid(row=2 * i, column=1, rowspan=2, sticky="e", padx=(14, 0), pady=(10 if i else 0, 0))
-            minus = ttk.Button(box, text="−", style="Step.TButton",
+            minus = button(box, text="−", style="Step.TButton",
                                command=lambda k=key: self.bump(k, -1))
             minus.pack(side="left")
             sp = ttk.Entry(box, textvariable=var, width=6, justify="center",
                            validate="key", validatecommand=vcmd)
             sp.pack(side="left", padx=4, ipady=3)
-            plus = ttk.Button(box, text="+", style="Step.TButton",
+            plus = button(box, text="+", style="Step.TButton",
                               command=lambda k=key: self.bump(k, 1))
             plus.pack(side="left")
             self.spins[key] = sp
@@ -1819,11 +1935,11 @@ class App:
         btns = ttk.Frame(bc, style="Card.TFrame")
         btns.pack(fill="x", pady=(16, 0))
         self.btn_row = btns
-        self.save_btn = ttk.Button(btns, text="Save entry", style="Accent.TButton", command=self.on_save)
+        self.save_btn = button(btns, text="Save entry", style="Accent.TButton", command=self.on_save)
         self.save_btn.pack(side="left")
-        self.repeat_btn = ttk.Button(btns, text="Repeat last", command=self.on_repeat)
+        self.repeat_btn = button(btns, text="Repeat last", command=self.on_repeat)
         self.repeat_btn.pack(side="left", padx=8)
-        self.clear_btn = ttk.Button(btns, text="Clear", command=self.on_clear)
+        self.clear_btn = button(btns, text="Clear", command=self.on_clear)
         self.clear_btn.pack(side="left")
 
         # --- this entry ---
@@ -1870,10 +1986,10 @@ class App:
         wrap, self.hist_tree = self.make_tree(hist_page, self.hist_cols, 8)
         bar = ttk.Frame(hist_page, style="Card.TFrame")
         bar.pack(side="bottom", fill="x", pady=(8, 0))
-        self.edit_btn = ttk.Button(bar, text="Edit selected entry", command=self.on_hist_edit)
+        self.edit_btn = button(bar, text="Edit selected entry", command=self.on_hist_edit)
         self.edit_btn.pack(side="left")
         self.edit_btn.state(["disabled"])
-        self.del_entry_btn = ttk.Button(bar, text="Delete selected entry", style="Danger.TButton",
+        self.del_entry_btn = button(bar, text="Delete selected entry", style="Danger.TButton",
                                         command=self.on_hist_delete)
         self.del_entry_btn.pack(side="left", padx=(8, 0))
         self.del_entry_btn.state(["disabled"])
