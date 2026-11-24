@@ -481,7 +481,7 @@ BUBBLE_ASSETS = {
     ),
 }
 
-APP_VERSION = "1.11"  # shown in the title bar so you can tell which build you are running
+APP_VERSION = "1.12"  # shown in the title bar so you can tell which build you are running
 START_W, START_H = 1136, 680  # the window opens at this size every time
 
 # ---------- logo (The Benefactor), embedded so no extra files are needed ----------
@@ -1188,6 +1188,75 @@ def tint(color, amount):
     return "#%02x%02x%02x" % tuple(int(v + (255 - v) * amount) for v in (r, g, b))
 
 
+def mix(a, b, t):
+    """Blend colour a towards colour b (0 = a, 1 = b); both #rrggbb."""
+    a, b = a.lstrip("#"), b.lstrip("#")
+    return "#%02x%02x%02x" % tuple(
+        int(int(a[i:i + 2], 16) * (1 - t) + int(b[i:i + 2], 16) * t) for i in (0, 2, 4))
+
+
+PLOT_BG, PLOT_DARK = "#1c1917", "#151311"
+
+
+def smooth_curve(pts, step=3):
+    """Smooth, never-overshooting curve (monotone cubic) through (x, y) points sorted by x."""
+    xs, ys = [], []
+    for x, y in pts:
+        if xs and x - xs[-1] < 1e-6:
+            ys[-1] = y
+        else:
+            xs.append(x)
+            ys.append(y)
+    n = len(xs)
+    if n < 2:
+        return list(zip(xs, ys))
+    d = [(ys[i + 1] - ys[i]) / (xs[i + 1] - xs[i]) for i in range(n - 1)]
+    m = [d[0]] + [0 if d[i - 1] * d[i] <= 0 else (d[i - 1] + d[i]) / 2 for i in range(1, n - 1)] + [d[-1]]
+    for i in range(n - 1):
+        if d[i] == 0:
+            m[i] = m[i + 1] = 0
+            continue
+        a, b = m[i] / d[i], m[i + 1] / d[i]
+        q = a * a + b * b
+        if q > 9:
+            t = 3 / math.sqrt(q)
+            m[i], m[i + 1] = t * a * d[i], t * b * d[i]
+    out = []
+    for i in range(n - 1):
+        h = xs[i + 1] - xs[i]
+        k = max(1, int(h / step))
+        for j in range(k):
+            t = j / k
+            t2, t3 = t * t, t * t * t
+            y = ((2 * t3 - 3 * t2 + 1) * ys[i] + (t3 - 2 * t2 + t) * h * m[i]
+                 + (-2 * t3 + 3 * t2) * ys[i + 1] + (t3 - t2) * h * m[i + 1])
+            out.append((xs[i] + t * h, y))
+    out.append((xs[-1], ys[-1]))
+    return out
+
+
+def area_strips(curve, bottom, color, amax=0.34, bands=24):
+    """The soft fill under a line: horizontal slices that fade from the colour at the line to nothing."""
+    ymin = min(y for _, y in curve)
+    if bottom - ymin < 2:
+        return []
+    out = []
+    for k in range(bands):
+        y0 = ymin + (bottom - ymin) * k / bands
+        y1 = ymin + (bottom - ymin) * (k + 1) / bands
+        fill = mix(PLOT_BG, color, amax * (1 - (k + 0.5) / bands))
+        yb = min(y1 + 1, bottom)
+        run = []
+        for x, y in curve + [(None, None)]:
+            if x is not None and y < y1 - 0.01:      # the curve is above this slice's bottom edge
+                run.append((x, min(max(y, y0), y1)))
+                continue
+            if len(run) >= 2:
+                out.append({"t": "poly", "pts": run + [(run[-1][0], yb), (run[0][0], yb)], "fill": fill})
+            run = []
+    return out
+
+
 def build_scene(series, w, h, selected=None):
     """Return (primitives, hits). Primitives are plain dicts a canvas can paint;
     hits are (x, y, text) points for hover tooltips."""
@@ -1210,9 +1279,8 @@ def build_scene(series, w, h, selected=None):
         if x > ml and x + item_w > w - mr:
             x, row = ml, row + 1
         y = 14 + row * 18
-        prims.append({"t": "line", "pts": [(x, y), (x + 16, y)], "color": s["color"], "width": 3,
-                      "dash": (4, 3) if s["dashed"] else None})
-        prims.append({"t": "text", "x": x + 22, "y": y, "anchor": "w", "color": TEXT, "size": 9, "text": label})
+        prims.append({"t": "oval", "x": x + 5, "y": y, "r": 4.5, "fill": s["color"]})
+        prims.append({"t": "text", "x": x + 16, "y": y, "anchor": "w", "color": TEXT, "size": 9, "text": label})
         x += item_w
     top = 14 + (row + 1) * 18 + 8
     left, right, bottom = ml, w - mr, h - mb
@@ -1236,9 +1304,14 @@ def build_scene(series, w, h, selected=None):
     def py(v):
         return bottom - v / ymax * (bottom - top)
 
+    prims.append({"t": "rect", "x0": left, "y0": top, "x1": right, "y1": bottom, "fill": PLOT_BG})
+    bands = 8 if right - left > 520 else 6
+    for i in range(0, bands, 2):
+        prims.append({"t": "rect", "x0": left + (right - left) * i / bands, "y0": top,
+                      "x1": left + (right - left) * (i + 1) / bands, "y1": bottom, "fill": PLOT_DARK})
     for tv in ticks:
         y = py(tv)
-        prims.append({"t": "line", "pts": [(left, y), (right, y)], "color": LINE if tv else MUTED, "width": 1, "dash": None})
+        prims.append({"t": "line", "pts": [(left, y), (right, y)], "color": "#2e2924" if tv else MUTED, "width": 1, "dash": None})
         prims.append({"t": "text", "x": left - 8, "y": y, "anchor": "e", "color": MUTED, "size": 9, "text": money_short(tv)})
     n = 5 if right - left > 520 else 3
     days = span / 86400
@@ -1249,14 +1322,26 @@ def build_scene(series, w, h, selected=None):
                       "text": t.strftime(fmt)})
 
     ordered = [s for s in series if s["name"] != selected] + [s for s in series if s["name"] == selected]
+    curves = {}
+    for s in ordered:
+        pts = [(px(t), py(v)) for t, v, _ in s["points"]]
+        curves[s["name"]] = smooth_curve(pts) if len(pts) >= 2 else pts
+    for s in ordered:                                  # soft fills first so no fill covers another line
+        if len(curves[s["name"]]) >= 2 and not s["dashed"]:
+            prims.extend(area_strips(curves[s["name"]], bottom, s["color"], 0.40 if s["name"] == selected else 0.30))
     for s in ordered:
         thick = s["name"] == selected
-        pts = [(px(t), py(v)) for t, v, _ in s["points"]]
-        if len(pts) >= 2:
-            prims.append({"t": "line", "pts": pts, "color": s["color"], "width": 3.5 if thick else 2,
+        c = curves[s["name"]]
+        if len(c) >= 2:
+            wd = 3.2 if thick else 2.2
+            if not s["dashed"]:                        # glow
+                prims.append({"t": "line", "pts": c, "color": mix(PLOT_BG, s["color"], 0.22), "width": wd + 6, "dash": None})
+                prims.append({"t": "line", "pts": c, "color": mix(PLOT_BG, s["color"], 0.5), "width": wd + 3, "dash": None})
+            prims.append({"t": "line", "pts": c, "color": s["color"], "width": wd,
                           "dash": (5, 4) if s["dashed"] else None})
+    for s in ordered:
+        r = 4.5 if s["name"] == selected else 3.5
         for (t, v, d) in s["points"]:
-            r = 4.5 if thick else 3.5
             prims.append({"t": "oval", "x": px(t), "y": py(v), "r": r, "fill": s["color"]})
             prims.append({"t": "shine", "x": px(t) - r * 0.3, "y": py(v) - r * 0.35, "r": r * 0.38, "fill": tint(s["color"], 0.6)})
             hits.append((px(t), py(v), f"{s['name']}\n{t.strftime('%b %d, %H:%M')}\n+{whole(d)}  \u2192  {whole(v)} total"))
@@ -1882,6 +1967,11 @@ class App:
                 if p["dash"]:
                     opts["dash"] = p["dash"]
                 cv.create_line(*flat, **opts)
+            elif p["t"] == "poly":
+                flat = [c for pt in p["pts"] for c in pt]
+                cv.create_polygon(*flat, fill=p["fill"], outline="")
+            elif p["t"] == "rect":
+                cv.create_rectangle(p["x0"], p["y0"], p["x1"], p["y1"], fill=p["fill"], outline="")
             elif p["t"] == "oval":
                 r = p["r"]
                 cv.create_oval(p["x"] - r, p["y"] - r, p["x"] + r, p["y"] + r, fill=p["fill"], outline=PANEL, width=1)
