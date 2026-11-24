@@ -254,6 +254,35 @@ def create_profile(data, name, client_type):
     return data[name]
 
 
+def update_client(data, old, new_name, client_type, reprice=False):
+    """Rename a client and/or switch VIP/Regular, in place. Returns an error message or None.
+    Past entries keep the amounts they were saved with unless reprice=True, which recalculates
+    each one from its bag counts at the new type's prices."""
+    key = find(data, old)
+    if key is None:
+        return "That client no longer exists."
+    new_name = new_name.strip()
+    if not new_name:
+        return "Enter a client name."
+    if client_type not in CUT:
+        return "Pick VIP or Regular."
+    clash = find(data, new_name)
+    if clash is not None and clash != key:
+        return f"'{new_name}' already exists."
+    profile = data[key]
+    profile["type"] = client_type
+    if reprice:
+        for h in profile.get("history", []):
+            lines = build_lines(client_type, h.get("counts") or {})
+            if lines:
+                h["cut"] = sum(x[2] for x in lines)
+                h["sale"] = sum(x[3] for x in lines)
+    if new_name != key:
+        del data[key]
+        data[new_name] = profile
+    return None
+
+
 def pick_profile(data):
     """Interactive: choose an existing client or create a new one. Returns (name, profile)."""
     names = sorted(data, key=str.lower)

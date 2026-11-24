@@ -65,3 +65,10 @@ Publish `TheBenefactorSetup.exe` as a GitHub Release (not in the repository file
 Version 1.11 uses a rounded, glossy "bubble" look (cards, buttons, fields, tabs). If it can't be
 applied on a machine, the app quietly falls back to the plain flat look. To force the flat look,
 run `python launder_app.pyw --classic` or set the environment variable `BENEFACTOR_CLASSIC=1`.
+
+## Theme, tiles and editing clients (v1.14)
+
+- Red Dead money theme: banknote-green palette with an engraved banknote border and gold seals.
+- The History / All clients / Progress menu is now a row of tiles.
+- **Edit client** (Client card) renames a client and/or switches VIP/Regular. Past entries keep the
+  amounts they were saved with, unless you tick "Recalculate their past entries at the new prices".
