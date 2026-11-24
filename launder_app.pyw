@@ -177,7 +177,7 @@ BUBBLE_ASSETS = {
     ),
 }
 
-APP_VERSION = "1.17"  # shown in the title bar so you can tell which build you are running
+APP_VERSION = "1.18"  # shown in the title bar so you can tell which build you are running
 START_W, START_H = 1460, 855  # the window opens at this size every time
 
 # ---------- logo (The Benefactor), embedded so no extra files are needed ----------
@@ -894,7 +894,7 @@ def mix(a, b, t):
 PLOT_BG, PLOT_DARK = "#122117", "#0d1911"
 
 
-def smooth_curve(pts, step=3):
+def smooth_curve(pts, step=6):
     """Smooth, never-overshooting curve (monotone cubic) through (x, y) points sorted by x."""
     xs, ys = [], []
     for x, y in pts:
@@ -931,7 +931,7 @@ def smooth_curve(pts, step=3):
     return out
 
 
-def area_strips(curve, bottom, color, amax=0.34, bands=24):
+def area_strips(curve, bottom, color, amax=0.34, bands=12):
     """The soft fill under a line: horizontal slices that fade from the colour at the line to nothing."""
     ymin = min(y for _, y in curve)
     if bottom - ymin < 2:
@@ -1070,20 +1070,20 @@ def build_banknote(w, h, margin=MARGIN):
                                             (inset, h - inset), (inset, inset)], "color": col, "width": 1})
     mid = margin / 2
     amp, lam = 4.2, 46.0
-    for k in range(6):                                  # ribbon of interlaced waves along each edge
+    for k in range(4):                                  # ribbon of interlaced waves along each edge
         ph = k * 0.52
         col = line if k % 2 == 0 else faint
         for horiz, length, ys in ((True, w, (mid, h - mid)), (False, h, (mid, w - mid))):
             for base in ys:
                 pts = []
-                for i in range(int((length - 2 * margin) / 4) + 1):
-                    u = margin + i * 4
+                for i in range(int((length - 2 * margin) / 8) + 1):
+                    u = margin + i * 8
                     v = base + amp * math.sin(2 * math.pi * u / lam + ph) * (0.55 + 0.45 * math.cos(math.pi * (u - length / 2) / length))
                     pts.append((u, v) if horiz else (v, u))
                 prims.append({"t": "line", "pts": pts, "color": col, "width": 1})
     for cx, cy in ((mid, mid), (w - mid, mid), (mid, h - mid), (w - mid, h - mid)):   # corner seals
-        prims.append({"t": "line", "pts": rosette(cx, cy, 13, 4, 8, 4, 60), "color": gold, "width": 1})
-        prims.append({"t": "line", "pts": rosette(cx, cy, 9, 3, 5, 3, 48), "color": "#b99a45", "width": 1})
+        prims.append({"t": "line", "pts": rosette(cx, cy, 13, 4, 8, 4, 40), "color": gold, "width": 1})
+        prims.append({"t": "line", "pts": rosette(cx, cy, 9, 3, 5, 3, 32), "color": "#b99a45", "width": 1})
     prims.append({"t": "text", "x": w / 2, "y": mid, "text": "$   \u00b7   $   \u00b7   $   \u00b7   $", "color": gold, "size": 9})
     prims.append({"t": "text", "x": w / 2, "y": h - mid, "text": "$   \u00b7   $   \u00b7   $   \u00b7   $", "color": gold, "size": 9})
     return prims
@@ -1843,7 +1843,9 @@ class App:
         self.chart = tk.Canvas(prog_page, bg=PANEL, highlightthickness=0, height=280)
         self.chart.pack(fill="both", expand=True)
         self.chart_hits = []
-        self.chart.bind("<Configure>", lambda e: self.draw_chart())
+        self._chart_job = None
+        self._chart_size = None
+        self.chart.bind("<Configure>", self.on_chart_resize)
         self.chart.bind("<Motion>", self.on_chart_move)
         self.chart.bind("<Leave>", lambda e: self.chart.delete("tip"))
 
@@ -1934,11 +1936,20 @@ class App:
 
     # ----- rendering -----
 
+    def on_chart_resize(self, event):
+        if (event.width, event.height) == self._chart_size:
+            return
+        if self._chart_job:
+            self.root.after_cancel(self._chart_job)
+        self._chart_job = self.root.after(100, self.draw_chart)
+
     def draw_chart(self):
+        self._chart_job = None
         cv = self.chart
+        w, h = cv.winfo_width(), cv.winfo_height()
+        self._chart_size = (w, h)
         cv.delete("all")
         self.chart_hits = []
-        w, h = cv.winfo_width(), cv.winfo_height()
         if w < 50 or h < 50:
             return  # not laid out yet; <Configure> will call us again
         series = build_series(self.data, self.metric.get(), self.combined.get())
@@ -2043,11 +2054,11 @@ class App:
             self.root.destroy()
 
     def on_root_resize(self, event):
-        if event.widget is not self.root:
-            return
+        if event.widget is not self.root or (event.width, event.height) == self._bg_size:
+            return                                   # moving the window is not a resize: do nothing
         if self._bg_job:
             self.root.after_cancel(self._bg_job)
-        self._bg_job = self.root.after(70, self.draw_bg)
+        self._bg_job = self.root.after(120, self.draw_bg)
 
     def draw_bg(self):
         self._bg_job = None
