@@ -177,7 +177,7 @@ BUBBLE_ASSETS = {
     ),
 }
 
-APP_VERSION = "1.20"  # shown in the title bar so you can tell which build you are running
+APP_VERSION = "1.21"  # shown in the title bar so you can tell which build you are running
 START_W, START_H = 1460, 855  # the window opens at this size every time
 
 # ---------- logo (The Benefactor), embedded so no extra files are needed ----------
@@ -1802,6 +1802,10 @@ class App:
             self.spins[key] = sp
             self.step_btns += [minus, plus]
 
+        self.free = tk.BooleanVar(value=False)
+        self.free_chk = ttk.Checkbutton(bc, text="Free laundry  (100% return, no cut taken)", variable=self.free,
+                                        style="Card.TCheckbutton", command=self.on_change)
+        self.free_chk.pack(anchor="w", pady=(12, 0))
         self.edit_note = ttk.Label(bc, text="", style="Gold.TLabel")   # shown only while editing
         btns = ttk.Frame(bc, style="Card.TFrame")
         btns.pack(fill="x", pady=(16, 0))
@@ -1887,7 +1891,8 @@ class App:
 
         self.hist_cols = [("date", "Date", 130, "w"), ("big", "Big", 44, "e"), ("avg", "Avg", 44, "e"),
                           ("small", "Small", 52, "e"), ("cut", "Regular", 100, "e"),
-                          ("sale", "Sale price", 100, "e"), ("take", "My take", 100, "e")]
+                          ("sale", "Sale price", 100, "e"), ("take", "My take", 100, "e"),
+                          ("free", "Free", 70, "e")]
         wrap, self.hist_tree = self.make_tree(hist_page, self.hist_cols, 8)
         bar = ttk.Frame(hist_page, style="Card.TFrame")
         bar.pack(side="bottom", fill="x", pady=(8, 0))
@@ -1906,7 +1911,8 @@ class App:
 
         self.all_cols = [("client", "Client", 140, "w"), ("type", "Type", 70, "w"),
                          ("entries", "Entries", 60, "e"), ("cut", "Cut total", 100, "e"),
-                         ("sale", "Sale total", 100, "e"), ("take", "My take", 100, "e")]
+                         ("sale", "Sale total", 100, "e"), ("take", "My take", 100, "e"),
+                         ("free", "Free laundry", 90, "e")]
         wrap, self.all_tree = self.make_tree(all_page, self.all_cols, 8)
         wrap.pack(fill="both", expand=True)
         self.all_tree.bind("<Double-1>", self.on_all_open)
@@ -2244,8 +2250,11 @@ class App:
         self.clear(self.calc_tree)
         p = self.profile()
         lines = L.build_lines(p["type"], self.counts()) if p else []
+        free = self.free.get()
         t_qty = t_cut = t_sale = 0
         for name, qty, cut, sale in lines:
+            if free:
+                cut = sale                      # free laundry: the client gets the whole sale value
             t_qty += qty
             t_cut += cut
             t_sale += sale
@@ -2267,28 +2276,32 @@ class App:
             c = h["counts"]
             self.hist_tree.insert("", "end", iid=f"h{idx}", values=(
                 h["date"], c.get("big", 0), c.get("avg", 0), c.get("small", 0),
-                L.money(h["cut"]), L.money(h["sale"]), L.money(h["sale"] - h["cut"])))
+                L.money(h["cut"]), L.money(h["sale"]), L.money(h["sale"] - h["cut"]),
+                "FREE" if h.get("free") else ""))
         if p["history"]:
             cut, sale = L.lifetime(p)
-            n = len(p["history"])
+            n, k = len(p["history"]), L.free_count(p)
+            extra = f", {k} free" if k else ""
             self.hist_tree.insert("", "end", tags=("total",), values=(
-                f"Lifetime ({n} {'entry' if n == 1 else 'entries'})", "", "", "",
-                L.money(cut), L.money(sale), L.money(sale - cut)))
+                f"Lifetime ({n} {'entry' if n == 1 else 'entries'}{extra})", "", "", "",
+                L.money(cut), L.money(sale), L.money(sale - cut), f"{k} free" if k else ""))
 
     def render_clients(self):
         self.clear(self.all_tree)
-        g_entries = g_cut = g_sale = 0
+        g_entries = g_cut = g_sale = g_free = 0
         for i, n in enumerate(self.names):
             p = self.data[n]
             cut, sale = L.lifetime(p)
             g_entries += len(p["history"])
             g_cut += cut
             g_sale += sale
+            g_free += L.free_count(p)
             self.all_tree.insert("", "end", iid=str(i), values=(
-                n, L.label(p["type"]), len(p["history"]), L.money(cut), L.money(sale), L.money(sale - cut)))
+                n, L.label(p["type"]), len(p["history"]), L.money(cut), L.money(sale), L.money(sale - cut),
+                L.free_count(p)))
         if self.names:
             self.all_tree.insert("", "end", iid="total", tags=("total",), values=(
-                "All clients", "", g_entries, L.money(g_cut), L.money(g_sale), L.money(g_sale - g_cut)))
+                "All clients", "", g_entries, L.money(g_cut), L.money(g_sale), L.money(g_sale - g_cut), g_free))
 
     # ----- actions -----
 
@@ -2383,6 +2396,7 @@ class App:
     def reset_inputs(self):
         """Empty the bag boxes and leave edit mode."""
         self.edit_idx = None
+        self.free.set(False)
         self.set_counts({})
 
     def on_clear(self):
@@ -2538,6 +2552,7 @@ class App:
         if not p or not 0 <= idx < len(p["history"]):
             return
         self.edit_idx = idx
+        self.free.set(bool(p["history"][idx].get("free")))
         self.set_counts(p["history"][idx]["counts"])
         self.update_edit_ui()
         self.render_calc()
@@ -2565,14 +2580,14 @@ class App:
         lines = L.build_lines(profile["type"], counts)
         if not lines:
             return "Enter at least one bag first."
-        cut = sum(x[2] for x in lines)
-        sale = sum(x[3] for x in lines)
+        free = bool(self.free.get())
+        cut, sale = L.entry_totals(profile["type"], counts, free)
         hist = profile["history"]
         if self.edit_idx is not None:
             i = self.edit_idx
             if not 0 <= i < len(hist):
                 return "That entry no longer exists."
-            hist[i].update(counts=counts, cut=cut, sale=sale)   # keeps its original date
+            hist[i].update(counts=counts, cut=cut, sale=sale, free=free)   # keeps its original date
             if i == len(hist) - 1:
                 profile["last"] = counts
             msg = f"Updated the entry from {hist[i]['date']} for {name}"
@@ -2580,13 +2595,13 @@ class App:
             profile["last"] = counts
             hist.append({
                 "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "counts": counts, "cut": cut, "sale": sale,
+                "counts": counts, "cut": cut, "sale": sale, "free": free,
             })
             msg = f"Saved for {name}"
         self.write(data)
         self.reset_inputs()          # empty and ready for the next entry
         self.refresh()
-        self.say(f"{msg} - your take {L.money(sale - cut)}.")
+        self.say(f"{msg} - free laundry, no cut taken." if free else f"{msg} - your take {L.money(sale - cut)}.")
         return None
 
     def on_all_open(self, _event=None):

@@ -76,3 +76,5 @@ run `python launder_app.pyw --classic` or set the environment variable `BENEFACT
 - **Notes** (v1.15): a Notes tile keeps free-text notes for each client. They save automatically as you type, and stay with the client when you rename them.
 
 - **Start screen** (v1.19): a welcome screen with your totals opens first. Press Enter, Space or click to continue. Untick "Show this screen when the app opens" to skip it (saved in `settings.json` beside your clients).
+
+- **Free laundry** (v1.21): tick "Free laundry" on an entry for a 100% return (no cut taken, so My take is $0). History marks those entries FREE and counts them per client, and All clients shows a Free laundry column.

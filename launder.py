@@ -244,6 +244,19 @@ def ask_yes(prompt):
     return input(prompt).strip().lower() in ("y", "yes")
 
 
+def entry_totals(client_type, counts, free=False):
+    """(cut, sale) for one entry. A free laundry is a 100% return: the client keeps the whole
+    sale value, so the cut equals the sale and my take is zero."""
+    lines = build_lines(client_type, counts)
+    sale = sum(x[3] for x in lines)
+    return (sale if free else sum(x[2] for x in lines)), sale
+
+
+def free_count(profile):
+    """How many free-laundry entries a client has received."""
+    return sum(1 for h in profile.get("history", []) if h.get("free"))
+
+
 def lifetime(profile):
     return (sum(h["cut"] for h in profile["history"]),
             sum(h["sale"] for h in profile["history"]))
@@ -275,8 +288,7 @@ def update_client(data, old, new_name, client_type, reprice=False):
         for h in profile.get("history", []):
             lines = build_lines(client_type, h.get("counts") or {})
             if lines:
-                h["cut"] = sum(x[2] for x in lines)
-                h["sale"] = sum(x[3] for x in lines)
+                h["cut"], h["sale"] = entry_totals(client_type, h.get("counts") or {}, bool(h.get("free")))
     if new_name != key:
         del data[key]
         data[new_name] = profile
