@@ -177,7 +177,7 @@ BUBBLE_ASSETS = {
     ),
 }
 
-APP_VERSION = "1.19"  # shown in the title bar so you can tell which build you are running
+APP_VERSION = "1.20"  # shown in the title bar so you can tell which build you are running
 START_W, START_H = 1460, 855  # the window opens at this size every time
 
 # ---------- logo (The Benefactor), embedded so no extra files are needed ----------
@@ -2040,7 +2040,7 @@ class App:
         root = self.root
         cv = tk.Canvas(root, bg=BG, highlightthickness=0, bd=0, takefocus=1)
         cv.place(x=0, y=0, relwidth=1, relheight=1)
-        cv.tkraise()
+        tk.Misc.tkraise(cv)                       # (Canvas.tkraise would raise canvas items, not the widget)
         self.start = cv
         self._start_job = None
         self._start_size = None
