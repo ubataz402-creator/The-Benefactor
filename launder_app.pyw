@@ -177,7 +177,7 @@ BUBBLE_ASSETS = {
     ),
 }
 
-APP_VERSION = "1.18"  # shown in the title bar so you can tell which build you are running
+APP_VERSION = "1.19"  # shown in the title bar so you can tell which build you are running
 START_W, START_H = 1460, 855  # the window opens at this size every time
 
 # ---------- logo (The Benefactor), embedded so no extra files are needed ----------
@@ -1105,6 +1105,37 @@ def paint_scene(cv, prims):
 TILE_GLYPHS = {"history": "clock", "clients": "people", "progress": "chart", "notes": "page"}
 
 
+def load_settings(path):
+    """Small app settings kept beside the client data. Anything unreadable falls back to the defaults."""
+    out = {"start_screen": True}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict) and isinstance(data.get("start_screen"), bool):
+            out["start_screen"] = data["start_screen"]
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+def save_settings(path, settings):
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(settings, fh, indent=2)
+        os.replace(tmp, path)
+        return True
+    except OSError:
+        return False
+
+
+def start_stats(data):
+    """(clients, entries, my take) shown on the start screen."""
+    entries = sum(len(p.get("history", [])) for p in data.values())
+    take = sum(h.get("sale", 0) - h.get("cut", 0) for p in data.values() for h in p.get("history", []))
+    return len(data), entries, take
+
+
 class Tile(tk.Canvas):
     """A big rounded menu tile: icon, title and a small caption. Click to open its page."""
 
@@ -1479,6 +1510,11 @@ class App:
         root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.center(START_W, START_H)
         self.refresh()
+        self.settings_file = os.path.join(os.path.dirname(os.path.abspath(path)), "settings.json")
+        self.settings = load_settings(self.settings_file)
+        self.start = None
+        if self.settings["start_screen"]:
+            self.open_start()
 
     # ----- setup -----
 
@@ -1996,6 +2032,79 @@ class App:
         dy = max(0, 6 - (y0 - 5))
         if dx or dy:
             cv.move("tip", dx, dy)
+
+    # ----- start screen -----
+
+    def open_start(self):
+        """A welcome screen laid over the app; Enter / click / Space opens the ledger."""
+        root = self.root
+        cv = tk.Canvas(root, bg=BG, highlightthickness=0, bd=0, takefocus=1)
+        cv.place(x=0, y=0, relwidth=1, relheight=1)
+        cv.tkraise()
+        self.start = cv
+        self._start_job = None
+        self._start_size = None
+        clients, entries, take = start_stats(L.load(self.path))
+        plaque = ttk.Frame(cv, style="Bubble.TFrame", padding=(52, 34))
+        self.start_plaque = plaque
+        if self.logo_header:
+            ttk.Label(plaque, image=self.logo_header, style="Card.TLabel").pack(pady=(0, 10))
+        ttk.Label(plaque, text="THE BENEFACTOR", style="Card.TLabel", foreground=GOLD2,
+                  font=("Georgia", 30, "bold")).pack()
+        ttk.Label(plaque, text="Every dollar accounted for", style="Muted.TLabel",
+                  font=("Georgia", 12, "italic")).pack(pady=(2, 20))
+        stats = ttk.Frame(plaque, style="Card.TFrame")
+        stats.pack(pady=(0, 22))
+        for i, (big, small) in enumerate(((str(clients), "client" if clients == 1 else "clients"),
+                                          (str(entries), "entry" if entries == 1 else "entries"),
+                                          (whole(take), "my take, all time"))):
+            col = ttk.Frame(stats, style="Card.TFrame")
+            col.grid(row=0, column=i, padx=22)
+            ttk.Label(col, text=big, style="Card.TLabel", foreground=GOLD,
+                      font=("Georgia", 20, "bold")).pack()
+            ttk.Label(col, text=small, style="Muted.TLabel").pack()
+        if not clients:
+            ttk.Label(plaque, text="Create your first client to get started.", style="Muted.TLabel").pack(pady=(0, 14))
+        enter = button(plaque, text="      Enter the ledger      ", style="Accent.TButton", command=self.close_start)
+        enter.pack()
+        self.show_start = tk.BooleanVar(value=True)
+        ttk.Checkbutton(plaque, text="Show this screen when the app opens", variable=self.show_start,
+                        style="Card.TCheckbutton", command=self.on_start_pref).pack(pady=(18, 0))
+        ttk.Label(plaque, text=f"v{APP_VERSION}", style="Muted.TLabel").pack(pady=(10, 0))
+        cv.bind("<Configure>", self.on_start_resize)
+        for ev in ("<Return>", "<space>", "<Escape>"):
+            cv.bind(ev, lambda e: self.close_start())
+        cv.bind("<Button-1>", lambda e: self.close_start() if e.widget is cv else None)
+        cv.focus_set()
+
+    def on_start_resize(self, event):
+        if (event.width, event.height) == self._start_size:
+            return
+        if self._start_job:
+            self.root.after_cancel(self._start_job)
+        self._start_job = self.root.after(60, self.draw_start)
+
+    def draw_start(self):
+        self._start_job = None
+        cv = self.start
+        if cv is None:
+            return
+        w, h = cv.winfo_width(), cv.winfo_height()
+        if w < 50 or h < 50:
+            return
+        self._start_size = (w, h)
+        paint_scene(cv, build_banknote(w, h))          # clears the canvas, so the plaque is placed again
+        cv.create_window(w / 2, h / 2, window=self.start_plaque, anchor="center")
+
+    def on_start_pref(self):
+        self.settings["start_screen"] = bool(self.show_start.get())
+        save_settings(self.settings_file, self.settings)
+
+    def close_start(self):
+        if self.start is not None:
+            self.start.destroy()
+            self.start = None
+            self.root.focus_set()
 
     # ----- notes -----
 

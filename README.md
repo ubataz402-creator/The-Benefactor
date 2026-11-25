@@ -74,3 +74,5 @@ run `python launder_app.pyw --classic` or set the environment variable `BENEFACT
   amounts they were saved with, unless you tick "Recalculate their past entries at the new prices".
 
 - **Notes** (v1.15): a Notes tile keeps free-text notes for each client. They save automatically as you type, and stay with the client when you rename them.
+
+- **Start screen** (v1.19): a welcome screen with your totals opens first. Press Enter, Space or click to continue. Untick "Show this screen when the app opens" to skip it (saved in `settings.json` beside your clients).
