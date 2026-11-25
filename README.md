@@ -78,3 +78,5 @@ run `python launder_app.pyw --classic` or set the environment variable `BENEFACT
 - **Start screen** (v1.19): a welcome screen with your totals opens first. Press Enter, Space or click to continue. Untick "Show this screen when the app opens" to skip it (saved in `settings.json` beside your clients).
 
 - **Free laundry** (v1.21): tick "Free laundry" on an entry for a 100% return (no cut taken, so My take is $0). History marks those entries FREE and counts them per client, and All clients shows a Free laundry column.
+
+- **Scoreboard** (v1.22): a sidebar switches between the Ledger and a Scoreboard that ranks clients by how often and how much they deposit, with a podium for the top three and tiers from Bronze to Legend.

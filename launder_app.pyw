@@ -177,7 +177,7 @@ BUBBLE_ASSETS = {
     ),
 }
 
-APP_VERSION = "1.21"  # shown in the title bar so you can tell which build you are running
+APP_VERSION = "1.22"  # shown in the title bar so you can tell which build you are running
 START_W, START_H = 1460, 855  # the window opens at this size every time
 
 # ---------- logo (The Benefactor), embedded so no extra files are needed ----------
@@ -1093,13 +1093,128 @@ def paint_scene(cv, prims):
     cv.delete("all")
     for p in prims:
         if p["t"] == "rect":
-            cv.create_rectangle(p["x0"], p["y0"], p["x1"], p["y1"], fill=p["fill"], outline="")
+            cv.create_rectangle(p["x0"], p["y0"], p["x1"], p["y1"], fill=p["fill"], outline=p.get("outline", ""))
+        elif p["t"] == "oval":
+            cv.create_oval(p["x"] - p["r"], p["y"] - p["r"], p["x"] + p["r"], p["y"] + p["r"],
+                           fill=p["fill"], outline=p.get("outline", ""))
         elif p["t"] == "line":
             flat = [c for pt in p["pts"] for c in pt]
             if len(flat) >= 4:
                 cv.create_line(*flat, fill=p["color"], width=p["width"])
         elif p["t"] == "text":
-            cv.create_text(p["x"], p["y"], text=p["text"], fill=p["color"], font=("Georgia", p["size"], "bold"))
+            cv.create_text(p["x"], p["y"], text=p["text"], fill=p["color"], anchor=p.get("anchor", "center"),
+                           font=p.get("font") or ("Georgia", p["size"], "bold"))
+
+
+# ---------- scoreboard (pure functions) ----------
+TIERS = [(100000, "Legend", "#c58be0"), (40000, "Platinum", "#7fd6d0"), (15000, "Gold", "#d4a94f"),
+         (5000, "Silver", "#b8c4c0"), (0, "Bronze", "#c98a5a")]       # by total deposited
+SCORE_METRICS = ["Overall score", "Total deposited", "Deposits", "Average deposit", "Frequency"]
+MEDALS = {1: "#f0cd7a", 2: "#c9d3d0", 3: "#d99a66"}
+
+
+def tier_for(total):
+    for floor, name, color in TIERS:
+        if total >= floor:
+            return name, color
+    return TIERS[-1][1], TIERS[-1][2]
+
+
+def client_stats(name, profile, now):
+    """What one client has deposited (a deposit is an entry; its amount is the entry's sale value)."""
+    hist = profile.get("history", [])
+    amounts = [h.get("sale", 0) for h in hist]
+    when = sorted(d for d in (parse_when(h.get("date")) for h in hist) if d)
+    n = len(hist)
+    total = sum(amounts)
+    gap = None
+    if len(when) >= 2:
+        span = (when[-1] - when[0]).total_seconds() / 86400
+        if span > 0:
+            gap = span / (len(when) - 1)             # average days between deposits
+    return {"name": name, "type": profile.get("type", "regular"), "n": n, "total": total,
+            "avg": total / n if n else 0, "big": max(amounts) if amounts else 0, "gap": gap,
+            "per_week": 7 / gap if gap else 0.0,
+            "since": (now - when[-1]).total_seconds() / 86400 if when else None,
+            "take": sum(h.get("sale", 0) - h.get("cut", 0) for h in hist),
+            "free": sum(1 for h in hist if h.get("free"))}
+
+
+def build_scoreboard(data, metric, now):
+    """Rows for every client, ranked by the chosen metric. Overall score (0-100) blends total
+    deposited (50%), number of deposits (25%) and how often they deposit (25%)."""
+    rows = [client_stats(n, p, now) for n, p in data.items()]
+    mt = max([r["total"] for r in rows] + [0])
+    mn = max([r["n"] for r in rows] + [0])
+    mf = max([r["per_week"] for r in rows] + [0])
+    for r in rows:
+        r["score"] = round(100 * (0.5 * (r["total"] / mt if mt else 0) + 0.25 * (r["n"] / mn if mn else 0)
+                                  + 0.25 * (r["per_week"] / mf if mf else 0)))
+        r["tier"], r["tier_color"] = tier_for(r["total"])
+    key = {"Overall score": "score", "Total deposited": "total", "Deposits": "n",
+           "Average deposit": "avg", "Frequency": "per_week"}.get(metric, "score")
+    rows.sort(key=lambda r: (-r[key], -r["total"], r["name"].lower()))
+    for i, r in enumerate(rows, 1):
+        r["rank"] = i
+    return rows
+
+
+def metric_text(row, metric):
+    if metric == "Total deposited":
+        return whole(row["total"])
+    if metric == "Deposits":
+        return f"{row['n']} deposit{'' if row['n'] == 1 else 's'}"
+    if metric == "Average deposit":
+        return whole(row["avg"])
+    if metric == "Frequency":
+        return gap_text(row["gap"])
+    return f"{row['score']} pts"
+
+
+def gap_text(gap):
+    if gap is None:
+        return "\u2014"
+    return f"every {gap * 24:.0f} hrs" if gap < 1 else f"every {gap:.1f} days"
+
+
+def ago_text(days):
+    if days is None:
+        return "\u2014"
+    if days < 1:
+        return "today"
+    d = int(days)
+    return f"{d} day{'' if d == 1 else 's'} ago"
+
+
+def build_podium(rows, w, h, metric):
+    """Gold / silver / bronze podium for the top three."""
+    prims = []
+    base = h - 12
+    prims.append({"t": "line", "pts": [(14, base), (w - 14, base)], "color": LINE, "width": 1})
+    top3 = rows[:3]
+    if not top3 or w < 260 or h < 150:
+        return prims
+    avail = h - 86
+    gap = min(200, w / 4)
+    bw = min(150, gap - 16)
+    spots = {1: (w / 2, 1.0), 2: (w / 2 - gap, 0.72), 3: (w / 2 + gap, 0.54)}
+    for r in top3:
+        cx, frac = spots[r["rank"]]
+        col = MEDALS[r["rank"]]
+        bh = avail * frac
+        top = base - bh
+        prims.append({"t": "rect", "x0": cx - bw / 2, "y0": top, "x1": cx + bw / 2, "y1": base,
+                      "fill": mix(PANEL, col, 0.22), "outline": col})
+        prims.append({"t": "text", "x": cx, "y": top + min(34, bh / 2), "text": str(r["rank"]), "color": col,
+                      "size": 26, "font": ("Georgia", 26, "bold")})
+        prims.append({"t": "text", "x": cx, "y": top - 38, "text": r["name"], "color": TEXT,
+                      "size": 12, "font": (FONT, 12, "bold")})
+        prims.append({"t": "text", "x": cx, "y": top - 18, "text": metric_text(r, metric), "color": GOLD2,
+                      "size": 11, "font": (FONT, 11)})
+        if bh > 70:
+            prims.append({"t": "text", "x": cx, "y": base - 16, "text": r["tier"], "color": r["tier_color"],
+                          "size": 9, "font": (FONT, 9, "bold")})
+    return prims
 
 
 TILE_GLYPHS = {"history": "clock", "clients": "people", "progress": "chart", "notes": "page"}
@@ -1191,6 +1306,37 @@ class Tile(tk.Canvas):
             self.create_line(cx - 10, cy + 5, cx - 3, cy - 2, cx + 2, cy + 2, cx + 10, cy - 8, fill=ink, width=2)
         self.create_text(58, h / 2 - 8, text=self.title, anchor="w", fill=ink, font=(FONT, 11, "bold"))
         self.create_text(58, h / 2 + 11, text=self.sub, anchor="w", fill=MUTED, font=(FONT, 9))
+
+
+class NavTile(Tile):
+    """A tall sidebar tile: icon over a title."""
+
+    W, H = 104, 92
+
+    def draw(self):
+        self.delete("all")
+        w, h = self.W, self.H
+        fill = mix(PANEL2, GOLD, 0.16) if self.active else (mix(PANEL2, "#ffffff", 0.07) if self.hover else PANEL2)
+        rim = GOLD if self.active else (GOLD2 if self.hover else "#3d6a4b")
+        for box, r, col in (((1, 1, w - 1, h - 1), 20, rim), ((2, 2, w - 2, h - 2), 19, fill),
+                            ((12, 5, w - 12, h * 0.4), 12, mix(fill, "#ffffff", 0.07))):
+            self.create_polygon(*rrect_points(*box, r), smooth=True, fill=col, outline="")
+        ink = GOLD2 if self.active else TEXT
+        cx, cy = w / 2, 32
+        self.create_oval(cx - 21, cy - 21, cx + 21, cy + 21, fill=mix(PANEL, GOLD, 0.10 if self.active else 0.03), outline=rim)
+        if self.glyph == "trophy":
+            self.create_polygon(cx - 9, cy - 11, cx + 9, cy - 11, cx + 7, cy + 2, cx + 2, cy + 6, cx - 2, cy + 6,
+                                cx - 7, cy + 2, outline=ink, fill="", width=2)
+            self.create_arc(cx - 15, cy - 9, cx - 5, cy + 1, start=90, extent=180, style="arc", outline=ink, width=2)
+            self.create_arc(cx + 5, cy - 9, cx + 15, cy + 1, start=-90, extent=180, style="arc", outline=ink, width=2)
+            self.create_line(cx, cy + 6, cx, cy + 10, fill=ink, width=2)
+            self.create_line(cx - 6, cy + 11, cx + 6, cy + 11, fill=ink, width=2)
+        else:                                                    # ledger book
+            self.create_rectangle(cx - 9, cy - 11, cx + 9, cy + 11, outline=ink, width=2)
+            self.create_line(cx - 4, cy - 11, cx - 4, cy + 11, fill=ink, width=2)
+            for dy in (-5, 0, 5):
+                self.create_line(cx, cy + dy, cx + 5, cy + dy, fill=ink, width=1)
+        self.create_text(w / 2, 73, text=self.title, fill=ink, font=(FONT, 10, "bold"))
 
 
 BUBBLE_ON = False
@@ -1728,7 +1874,7 @@ class App:
 
     def build(self):
         root = self.root
-        root.columnconfigure(1, weight=1)
+        root.columnconfigure(2, weight=1)
         root.rowconfigure(1, weight=1)
         self.bg_cv = tk.Canvas(root, bg=BG, highlightthickness=0, bd=0)    # engraved banknote border
         self.bg_cv.place(x=0, y=0, relwidth=1, relheight=1)
@@ -1737,7 +1883,7 @@ class App:
         root.bind("<Configure>", self.on_root_resize, add="+")
 
         head = ttk.Frame(root, style="Bubble.TFrame", padding=(16, 10))
-        head.grid(row=0, column=0, columnspan=2, sticky="ew", padx=MARGIN, pady=(MARGIN, 8))
+        head.grid(row=0, column=0, columnspan=3, sticky="ew", padx=MARGIN, pady=(MARGIN, 8))
         if self.logo_header:
             ttk.Label(head, image=self.logo_header, style="Card.TLabel").pack(side="left", padx=(0, 12))
         ttk.Label(head, text="THE BENEFACTOR", style="CardTitle.TLabel").pack(side="left")
@@ -1746,10 +1892,18 @@ class App:
         button(head, text="Edit prices", command=self.on_prices).pack(side="right", padx=(0, 8))
         ttk.Label(head, text=f"v{APP_VERSION}", style="Muted.TLabel").pack(side="right", padx=(0, 12))
 
+        side = ttk.Frame(root, style="Bubble.TFrame", padding=8)
+        side.grid(row=1, column=0, sticky="ns", padx=(MARGIN, 0), pady=(0, 6))
+        self.nav = {}
+        for key, title, glyph in (("ledger", "Ledger", "book"), ("score", "Scoreboard", "trophy")):
+            tile = NavTile(side, title, "", glyph, lambda k=key: self.show_page(k))
+            tile.pack(pady=(0, 10))
+            self.nav[key] = tile
         left = ttk.Frame(root)
-        left.grid(row=1, column=0, sticky="ns", padx=(MARGIN, 10), pady=(0, 6))
+        left.grid(row=1, column=1, sticky="ns", padx=(14, 10), pady=(0, 6))
         right = ttk.Frame(root)
-        right.grid(row=1, column=1, sticky="nsew", padx=(10, MARGIN), pady=(0, 6))
+        right.grid(row=1, column=2, sticky="nsew", padx=(10, MARGIN), pady=(0, 6))
+        self.left_frame, self.right_frame = left, right
         right.columnconfigure(0, weight=1)
         right.rowconfigure(1, weight=1)
 
@@ -1921,10 +2075,107 @@ class App:
         # --- status bar ---
         self.status = tk.StringVar(value="")
         ttk.Label(root, textvariable=self.status, style="Status.TLabel").grid(
-            row=2, column=0, sticky="w", padx=MARGIN, pady=(0, MARGIN))
+            row=2, column=0, columnspan=2, sticky="w", padx=MARGIN, pady=(0, MARGIN))
         self.where = tk.StringVar(value="")
         ttk.Label(root, textvariable=self.where, style="Status.TLabel").grid(
-            row=2, column=1, sticky="e", padx=MARGIN, pady=(0, MARGIN))
+            row=2, column=1, columnspan=2, sticky="e", padx=MARGIN, pady=(0, MARGIN))
+        self.build_scoreboard_page()
+        self.show_page("ledger")
+
+    def build_scoreboard_page(self):
+        self.page = "ledger"
+        self.score_page = ttk.Frame(self.root)
+        self.score_page.rowconfigure(0, weight=1)
+        self.score_page.columnconfigure(0, weight=1)
+        sc = self.card(self.score_page, "Scoreboard")
+        sc.grid(row=0, column=0, sticky="nsew")
+        ctl = ttk.Frame(sc, style="Card.TFrame")
+        ctl.pack(fill="x", pady=(0, 6))
+        ttk.Label(ctl, text="Rank clients by", style="Card.TLabel").pack(side="left")
+        self.score_metric = tk.StringVar(value=SCORE_METRICS[0])
+        mc = ttk.Combobox(ctl, textvariable=self.score_metric, values=SCORE_METRICS, state="readonly", width=16)
+        mc.pack(side="left", padx=(8, 16))
+        mc.bind("<<ComboboxSelected>>", lambda e: self.render_score())
+        ttk.Label(ctl, text="A deposit is an entry; its amount is the sale value.  Double-click a client to open them.",
+                  style="Muted.TLabel").pack(side="left")
+        self.podium = tk.Canvas(sc, bg=PANEL, highlightthickness=0, height=210)
+        self.podium.pack(fill="x", pady=(0, 8))
+        self._podium_job = None
+        self._podium_size = None
+        self.podium.bind("<Configure>", self.on_podium_resize)
+        cols = [("rank", "#", 44, "center"), ("client", "Client", 150, "w"), ("tier", "Tier", 84, "w"),
+                ("n", "Deposits", 70, "e"), ("total", "Total deposited", 118, "e"), ("avg", "Avg deposit", 100, "e"),
+                ("big", "Biggest", 96, "e"), ("freq", "How often", 118, "e"), ("last", "Last deposit", 100, "e"),
+                ("score", "Score", 60, "e")]
+        wrap, self.score_tree = self.make_tree(sc, cols, 7)
+        wrap.pack(fill="both", expand=True)
+        for rank, col in MEDALS.items():
+            self.score_tree.tag_configure(f"r{rank}", foreground=col)
+        self.score_tree.bind("<Double-1>", self.on_score_open)
+        self.score_tree.bind("<Return>", self.on_score_open)
+        self.score_sum = ttk.Label(sc, text="", style="Muted.TLabel")
+        self.score_sum.pack(anchor="w", pady=(8, 0))
+        self.score_rows = []
+
+    def show_page(self, page):
+        if page == self.page and self.nav["ledger"].active == (page == "ledger") and self.nav["score"].active == (page == "score"):
+            return
+        self.page = page
+        if page == "score":
+            self.left_frame.grid_remove()
+            self.right_frame.grid_remove()
+            self.score_page.grid(row=1, column=1, columnspan=2, sticky="nsew", padx=(14, MARGIN), pady=(0, 6))
+            self.render_score()
+        else:
+            self.score_page.grid_remove()
+            self.left_frame.grid()
+            self.right_frame.grid()
+        for key, tile in self.nav.items():
+            tile.set_active(key == page)
+
+    def render_score(self):
+        rows = build_scoreboard(self.data, self.score_metric.get(), datetime.now())
+        self.score_rows = rows
+        self.clear(self.score_tree)
+        for r in rows:
+            self.score_tree.insert("", "end", iid=f"s{r['name']}", tags=(f"r{r['rank']}",) if r["rank"] <= 3 else (),
+                                   values=(r["rank"], r["name"], r["tier"], r["n"],
+                                           whole(r["total"]) if r["n"] else "\u2014",
+                                           whole(r["avg"]) if r["n"] else "\u2014",
+                                           whole(r["big"]) if r["n"] else "\u2014",
+                                           gap_text(r["gap"]), ago_text(r["since"]), r["score"]))
+        total = sum(r["total"] for r in rows)
+        deposits = sum(r["n"] for r in rows)
+        self.score_sum.configure(text=(f"{len(rows)} clients  \u00b7  {deposits} deposits  \u00b7  {whole(total)} deposited"
+                                       f"  \u00b7  {whole(total / deposits) if deposits else '$0'} average deposit")
+                                 if rows else "No clients yet.")
+        self._podium_size = None
+        self.draw_podium()
+
+    def on_podium_resize(self, event):
+        if (event.width, event.height) == self._podium_size:
+            return
+        if self._podium_job:
+            self.root.after_cancel(self._podium_job)
+        self._podium_job = self.root.after(80, self.draw_podium)
+
+    def draw_podium(self):
+        self._podium_job = None
+        cv = self.podium
+        w, h = cv.winfo_width(), cv.winfo_height()
+        if w < 50 or h < 50:
+            return
+        self._podium_size = (w, h)
+        paint_scene(cv, build_podium(self.score_rows, w, h, self.score_metric.get()))
+
+    def on_score_open(self, _event=None):
+        sel = self.score_tree.selection()
+        if sel and sel[0].startswith("s") and sel[0][1:] in self.data:
+            self.cur = sel[0][1:]
+            self.reset_inputs()
+            self.refresh()
+            self.show_page("ledger")
+            self.tabs.select(0)
 
     def write(self, data):
         """Save, then read the file back to prove it really landed on disk."""
@@ -2241,6 +2492,8 @@ class App:
         self.render_calc()
         self.render_history()
         self.render_clients()
+        if getattr(self, "page", None) == "score":
+            self.render_score()
 
     @staticmethod
     def clear(tree):
