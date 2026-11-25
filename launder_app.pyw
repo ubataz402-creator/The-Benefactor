@@ -2060,7 +2060,7 @@ SPRITES = {
     ),
 }
 
-APP_VERSION = "1.23"  # shown in the title bar so you can tell which build you are running
+APP_VERSION = "1.24"  # shown in the title bar so you can tell which build you are running
 START_W, START_H = 1460, 855  # the window opens at this size every time
 
 # ---------- logo (The Benefactor), embedded so no extra files are needed ----------
@@ -3887,11 +3887,15 @@ class App:
             tile = NavTile(side, title, "", glyph, lambda k=key: self.show_page(k))
             tile.pack(pady=(0, 10))
             self.nav[key] = tile
-        left = ttk.Frame(root)
-        left.grid(row=1, column=1, sticky="ns", padx=(14, 10), pady=(0, 6))
-        right = ttk.Frame(root)
-        right.grid(row=1, column=2, sticky="nsew", padx=(10, MARGIN), pady=(0, 6))
-        self.left_frame, self.right_frame = left, right
+        # both pages sit in the same grid cell and switching just raises one: no re-layout, no redraws
+        self.ledger_page = ttk.Frame(root)
+        self.ledger_page.grid(row=1, column=1, columnspan=2, sticky="nsew", pady=(0, 6))
+        self.ledger_page.rowconfigure(0, weight=1)
+        self.ledger_page.columnconfigure(1, weight=1)
+        left = ttk.Frame(self.ledger_page)
+        left.grid(row=0, column=0, sticky="ns", padx=(14, 10))
+        right = ttk.Frame(self.ledger_page)
+        right.grid(row=0, column=1, sticky="nsew", padx=(10, MARGIN))
         right.columnconfigure(0, weight=1)
         right.rowconfigure(1, weight=1)
 
@@ -4071,6 +4075,8 @@ class App:
     def build_scoreboard_page(self):
         self.page = "ledger"
         self.score_page = ttk.Frame(self.root)
+        self.score_page.grid(row=1, column=1, columnspan=2, sticky="nsew", padx=(14, MARGIN), pady=(0, 6))
+        self.score_dirty = True
         self.score_page.rowconfigure(0, weight=1)
         self.score_page.columnconfigure(0, weight=1)
         sc = self.card(self.score_page, "Scoreboard")
@@ -4104,22 +4110,18 @@ class App:
         self.score_rows = []
 
     def show_page(self, page):
-        if page == self.page and self.nav["ledger"].active == (page == "ledger") and self.nav["score"].active == (page == "score"):
-            return
         self.page = page
         if page == "score":
-            self.left_frame.grid_remove()
-            self.right_frame.grid_remove()
-            self.score_page.grid(row=1, column=1, columnspan=2, sticky="nsew", padx=(14, MARGIN), pady=(0, 6))
-            self.render_score()
+            if self.score_dirty:
+                self.render_score()
+            self.score_page.tkraise()
         else:
-            self.score_page.grid_remove()
-            self.left_frame.grid()
-            self.right_frame.grid()
+            self.ledger_page.tkraise()
         for key, tile in self.nav.items():
             tile.set_active(key == page)
 
     def render_score(self):
+        self.score_dirty = False
         rows = build_scoreboard(self.data, self.score_metric.get(), datetime.now())
         self.score_rows = rows
         self.clear(self.score_tree)
@@ -4485,6 +4487,7 @@ class App:
         self.render_calc()
         self.render_history()
         self.render_clients()
+        self.score_dirty = True
         if getattr(self, "page", None) == "score":
             self.render_score()
 
