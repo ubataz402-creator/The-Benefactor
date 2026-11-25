@@ -80,3 +80,5 @@ run `python launder_app.pyw --classic` or set the environment variable `BENEFACT
 - **Free laundry** (v1.21): tick "Free laundry" on an entry for a 100% return (no cut taken, so My take is $0). History marks those entries FREE and counts them per client, and All clients shows a Free laundry column.
 
 - **Scoreboard** (v1.22): a sidebar switches between the Ledger and a Scoreboard that ranks clients by how often and how much they deposit, with a podium for the top three and tiers from Bronze to Legend.
+
+- **Graphics** (v1.23): buttons, tiles, tick boxes and graph dots are now smooth anti-aliased pictures instead of jagged drawn shapes. If the pictures cannot load, the app falls back to the old drawn shapes.
